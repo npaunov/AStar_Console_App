@@ -11,8 +11,11 @@ class Program
         // Create a 2D grid (0 = free, 1 = obstacle)
         int[,] grid = new int[height, width];
 
+        // Create a 2D array for cell movement cost (random 1-9 for each cell)
+        int[,] cellCost = new int[height, width];
+
         // Number of obstacles to randomly place in the grid
-        int obstacleCount = 100;
+        int obstacleCount = 400;
         // Random number generator for obstacle and position selection
         var rand = new Random();
 
@@ -22,9 +25,9 @@ class Program
             int x, y;
             do
             {
-                x = rand.Next(width);   // Random column
-                y = rand.Next(height);  // Random row
-            } while (grid[y, x] == 1); // Repeat if cell is an obstacle
+                x = rand.Next(width);
+                y = rand.Next(height);
+            } while (grid[y, x] == 1);
             return (x, y);
         }
 
@@ -37,8 +40,8 @@ class Program
         }
 
         // For testing, set fixed start and goal positions
-        start = (0, 0);
-        goal = (29, 29);
+        //start = (0, 0);
+        //goal = (29, 29);
 
         // Place obstacles randomly, making sure not to overwrite start or goal
         int placed = 0;
@@ -54,44 +57,25 @@ class Program
             }
         }
 
+        // Assign random weights (1-9) to all free cells
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+                cellCost[y, x] = grid[y, x] == 0 ? rand.Next(1, 10) : 0;
+
+        // Print column markers (A, B, C, ...)
+        Console.WriteLine("Grid with weights (before path):");
+        PrintGrid(grid, cellCost, null, start, goal, width, height, showPath: false);
+
         // Start measuring the time taken for the A* search
         var sw = System.Diagnostics.Stopwatch.StartNew();
         // Run the A* search algorithm to find the path
-        var path = AStarSearch(grid, start, goal);
+        var path = AStarSearch(grid, cellCost, start, goal);
         // Stop the timer
         sw.Stop();
 
-        // Print column markers (A, B, C, ...)
-        Console.Write("   "); // Padding for row numbers
-        for (int x = 0; x < width; x++)
-        {
-            char colMark = (char)('A' + x); // Convert column index to letter
-            Console.Write($"{colMark} ");
-        }
-        Console.WriteLine();
-
-        // Print the grid row by row
-        for (int y = 0; y < height; y++)
-        {
-            // Print row marker (1, 2, 3, ...)
-            Console.Write($"{y + 1,2} "); // Right-aligned, 2 spaces
-
-            for (int x = 0; x < width; x++)
-            {
-                // Print different symbols for start, goal, obstacles, path, and empty cells
-                if ((x, y) == start)
-                    Console.Write("S "); // Start cell
-                else if ((x, y) == goal)
-                    Console.Write("G "); // Goal cell
-                else if (grid[y, x] == 1)
-                    Console.Write("@ "); // Obstacle
-                else if (path.Contains((x, y)))
-                    Console.Write("* "); // Path cell
-                else
-                    Console.Write(". "); // Empty cell
-            }
-            Console.WriteLine(); // Newline after each row
-        }
+        // Print grid with path
+        Console.WriteLine("\nGrid with path:");
+        PrintGrid(grid, cellCost, path, start, goal, width, height, showPath: true);
 
         // --- Reporting Section ---
         Console.WriteLine();
@@ -133,16 +117,71 @@ class Program
             int row = coord.y + 1;            // Convert y to row number (1-based)
             return $"{col}{row}";
         }
+
+        // Helper function to print the grid with weights or path
+        static void PrintGrid(
+            int[,] grid,
+            int[,] cellCost,
+            List<(int, int)> path,
+            (int x, int y) start,
+            (int x, int y) goal,
+            int width,
+            int height,
+            bool showPath)
+        {
+            // Print column markers (A, B, C, ...)
+            Console.Write(" "); // For alignment with row numbers
+            for (int x = 0; x < width; x++)
+            {
+                char colMark = (char)('A' + x);
+                Console.Write($"{colMark} ");
+            }
+            Console.WriteLine();
+            for (int y = 0; y < height; y++)
+            {
+                Console.Write($"{y + 1,2} ");
+                for (int x = 0; x < width; x++)
+                {
+                    if ((x, y) == start)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.Write("S ");
+                        Console.ResetColor();
+                    }
+                    else if ((x, y) == goal)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.Write("G ");
+                        Console.ResetColor();
+                    }
+                    else if (grid[y, x] == 1)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.Write("@ ");
+                        Console.ResetColor();
+                    }
+                    else if (showPath && path != null && path.Contains((x, y)))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.Write("* ");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.DarkBlue;
+                        Console.Write($"{cellCost[y, x]} ");
+                        Console.ResetColor();
+                    }
+                }
+                Console.WriteLine();
+            }
+        }
     }
 
     /// <summary>
-    /// Performs the A* search algorithm on a 2D grid with diagonal movement.
+    /// Performs the A* search algorithm on a 2D grid with diagonal movement and cell weights.
     /// </summary>
-    /// <param name="grid">2D grid (0 = free, 1 = obstacle)</param>
-    /// <param name="start">Start position (x, y)</param>
-    /// <param name="goal">Goal position (x, y)</param>
-    /// <returns>List of positions from start to goal, or empty if no path</returns>
-    static List<(int, int)> AStarSearch(int[,] grid, (int, int) start, (int, int) goal)
+    static List<(int, int)> AStarSearch(int[,] grid, int[,] cellCost, (int, int) start, (int, int) goal)
     {
         // The open set, sorted by F = G + H (total estimated cost)
         var openSet = new SortedSet<(double, double, (int, int))>(Comparer<(double, double, (int, int))>.Create((a, b) =>
@@ -176,7 +215,7 @@ class Program
             openSet.Remove(openSet.Min);
 
             // Check all valid neighbors (8 directions)
-            foreach (var (neighbor, moveCost) in GetNeighborsWithCost(grid, current))
+            foreach (var (neighbor, moveCost) in GetNeighborsWithCost(grid, cellCost, current))
             {
                 // Calculate tentative G score (cost from start to neighbor)
                 double tentativeG = gScore[current] + moveCost;
@@ -198,12 +237,9 @@ class Program
     }
 
     /// <summary>
-    /// Returns a list of valid neighbor positions (8 directions) and their move cost.
+    /// Returns a list of valid neighbor positions (8 directions) and their move cost, using cell weights.
     /// </summary>
-    /// <param name="grid">2D grid (0 = free, 1 = obstacle)</param>
-    /// <param name="pos">Current position (x, y)</param>
-    /// <returns>List of tuples: (neighbor position, move cost)</returns>
-    static List<((int, int), double)> GetNeighborsWithCost(int[,] grid, (int, int) pos)
+    static List<((int, int), double)> GetNeighborsWithCost(int[,] grid, int[,] cellCost, (int, int) pos)
     {
         var neighbors = new List<((int, int), double)>();
         // Directions: N, NE, E, SE, S, SW, W, NW
@@ -211,13 +247,13 @@ class Program
         int[] dy = { -1, -1, 0, 1, 1, 1, 0, -1 };
         for (int dir = 0; dir < 8; dir++)
         {
-            int nx = pos.Item1 + dx[dir]; // Neighbor x
-            int ny = pos.Item2 + dy[dir]; // Neighbor y
+            int nx = pos.Item1 + dx[dir];
+            int ny = pos.Item2 + dy[dir];
             // Check if neighbor is within grid bounds and not an obstacle
             if (nx >= 0 && ny >= 0 && nx < grid.GetLength(1) && ny < grid.GetLength(0) && grid[ny, nx] == 0)
             {
-                // Diagonal move if both dx and dy are not zero, else straight
-                double cost = (dx[dir] != 0 && dy[dir] != 0) ? Math.Sqrt(2) : 1.0;
+                // Diagonal move: multiply cell cost by sqrt(2), else use cell cost
+                double cost = cellCost[ny, nx] * ((dx[dir] != 0 && dy[dir] != 0) ? Math.Sqrt(2) : 1.0);
                 neighbors.Add(((nx, ny), cost));
             }
         }
@@ -227,9 +263,6 @@ class Program
     /// <summary>
     /// Octile distance heuristic for 8-directional movement.
     /// </summary>
-    /// <param name="a">First position (x, y)</param>
-    /// <param name="b">Second position (x, y)</param>
-    /// <returns>Estimated cost from a to b</returns>
     static double Heuristic((int, int) a, (int, int) b)
     {
         int dx = Math.Abs(a.Item1 - b.Item1); // Horizontal distance
@@ -243,9 +276,6 @@ class Program
     /// <summary>
     /// Reconstructs the path from start to goal using the cameFrom map.
     /// </summary>
-    /// <param name="cameFrom">Dictionary mapping each node to its parent</param>
-    /// <param name="current">Goal position</param>
-    /// <returns>List of positions from start to goal</returns>
     static List<(int, int)> ReconstructPath(Dictionary<(int, int), (int, int)> cameFrom, (int, int) current)
     {
         var path = new List<(int, int)> { current }; // Start with goal
