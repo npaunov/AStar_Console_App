@@ -10,10 +10,11 @@ using AStar.Rendering;
 /// <para>
 /// By default it runs the <b>experiment harness</b>: it prompts for one
 /// configuration — grid size, obstacle density, movement model — then executes
-/// 30 independently generated environments against three algorithms and appends
-/// 90 rows to <c>runs.csv</c>. <c>--demo</c> runs the original single-map
-/// walkthrough instead, which prints the grid and renders the three-panel
-/// figure; <c>--selftest</c> runs the known-answer checks.
+/// 30 independently generated environments against three algorithms, appends 90
+/// rows to <c>runs.csv</c> and refreshes the <c>runs_excel.csv</c> viewing copy
+/// beside it. <c>--demo</c> runs the original single-map walkthrough instead,
+/// which prints the grid and renders the three-panel figure; <c>--selftest</c>
+/// runs the known-answer checks.
 /// </para>
 /// </summary>
 class Program
@@ -146,13 +147,12 @@ class Program
         Console.WriteLine();
         Console.WriteLine($"{summary.RowsWritten} rows appended to {csvPath}");
 
-        // After the data is safely on disk and closed, never before.
-        if (options.ExcelView)
-        {
-            int code = WriteExcelView(options.ResultsDirectory);
-            if (code != Ok)
-                return code;
-        }
+        // Always written, and only after the data is safely on disk and closed.
+        // It is derived from the file that was just completed, so the two can
+        // never be out of step.
+        int viewCode = WriteExcelView(options.ResultsDirectory);
+        if (viewCode != Ok)
+            return viewCode;
 
         return summary.CrossCheckPassed ? Ok : CrossCheckFailed;
     }
@@ -394,16 +394,17 @@ class Program
     // ----------------------------------------------------------- arguments
 
     sealed record Options(
-        bool SelfTest, bool Demo, bool Warmup, bool ExcelView, bool ExcelOnly,
+        bool SelfTest, bool Demo, bool Warmup, bool ExcelOnly,
         string ResultsDirectory, long MasterSeed);
 
     /// <summary>
     /// Arguments: <c>--selftest</c> runs the known-answer checks; <c>--demo</c>
     /// runs the single-map walkthrough instead of the harness;
     /// <c>--no-warmup</c> skips the JIT warmup pass, which exists so the warmup
-    /// can itself be measured against; <c>--excel</c> also writes the
-    /// spreadsheet viewing copy after the run and <c>--excel-only</c> writes it
-    /// from the existing <c>runs.csv</c> without running anything;
+    /// can itself be measured against; <c>--excel-only</c> rewrites the
+    /// spreadsheet viewing copy from the existing <c>runs.csv</c> without
+    /// running anything, which is how it is refreshed after a run that predates
+    /// it;
     /// <c>--seed N</c> or <c>--seed=N</c> sets the
     /// master seed every environment is derived from; the first argument without
     /// a <c>--</c> prefix overrides the output directory. The prefix convention
@@ -420,7 +421,6 @@ class Program
         bool selfTest = false;
         bool demo = false;
         bool warmup = true;
-        bool excelView = false;
         bool excelOnly = false;
         string? resultsDirectory = null;
         long masterSeed = SeedScheme.DefaultMasterSeed;
@@ -457,17 +457,9 @@ class Program
                 continue;
             }
 
-            if (arg.Equals("--excel", StringComparison.OrdinalIgnoreCase))
-            {
-                excelView = true;
-                continue;
-            }
-
-            // Implies --excel: writing the copy is the whole point of the flag.
             if (arg.Equals("--excel-only", StringComparison.OrdinalIgnoreCase))
             {
                 excelOnly = true;
-                excelView = true;
                 continue;
             }
 
@@ -498,7 +490,7 @@ class Program
             Console.WriteLine($"Ignoring unknown flag: {arg}");
         }
 
-        options = new Options(selfTest, demo, warmup, excelView, excelOnly,
+        options = new Options(selfTest, demo, warmup, excelOnly,
             resultsDirectory ?? DefaultResultsDirectory(), masterSeed);
         return true;
     }
