@@ -25,15 +25,22 @@ public sealed record Configuration(int Size, double Density, MovementModel Model
         $"{Model.Name}";
 
     /// <summary>
-    /// "size500_density20_8dir" — the directory this configuration's figures go
-    /// in. Filename-safe by construction: digits and underscores only, and the
-    /// direction count rather than the model's display name, which carries a
-    /// hyphen.
+    /// "size500_density20_8dir" — the name of the directory this configuration's
+    /// output goes in. Filename-safe by construction: digits and underscores
+    /// only, and the direction count rather than the model's display name,
+    /// which carries a hyphen.
     /// </summary>
     public string Slug =>
         $"size{Size.ToString(CultureInfo.InvariantCulture)}_" +
         $"density{DensityPercent.ToString("F0", CultureInfo.InvariantCulture)}_" +
         $"{Model.DirectionCount.ToString(CultureInfo.InvariantCulture)}dir";
+
+    /// <summary>
+    /// This configuration's own output directory under the results root, holding
+    /// its CSV pair and its 30 figures. Defined here so the recorder and the
+    /// figure writer cannot disagree about where a configuration's output lives.
+    /// </summary>
+    public string DirectoryIn(string resultsRoot) => Path.Combine(resultsRoot, Slug);
 }
 
 /// <summary>
@@ -63,6 +70,18 @@ public static class ExperimentMatrix
         MovementModel.FourDirectional,
         MovementModel.EightDirectional,
     };
+
+    /// <summary>
+    /// Every configuration in the matrix — 4 sizes × 5 densities × 2 models =
+    /// 40 — in a fixed order: size, then density, then movement model. Ordered
+    /// smallest first, so a full run surfaces a problem on a 50 × 50 grid in
+    /// seconds rather than after the 500 × 500 work.
+    /// </summary>
+    public static Configuration[] All() =>
+        (from size in GridSizes
+         from density in Densities
+         from model in Models
+         select new Configuration(size, density, model)).ToArray();
 
     /// <summary>
     /// The heuristic that is <i>exact</i> for this movement model: Manhattan for

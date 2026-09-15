@@ -103,12 +103,17 @@ public sealed class CsvRecorder : IDisposable
     public static string Header => string.Join(FieldSeparator, Columns.Select(column => column.Name));
 
     /// <summary>
-    /// Opens the file for appending, creating it and its directory if needed. An
-    /// existing file must carry exactly the expected header: appending rows with
-    /// a different shape would corrupt the study's only data file, so a mismatch
-    /// is an error rather than something to work around.
+    /// Opens the file, creating it and its directory if needed. When appending
+    /// to an existing file it must carry exactly the expected header: adding
+    /// rows of a different shape would corrupt a data file, so a mismatch is an
+    /// error rather than something to work around.
+    /// <para>
+    /// <paramref name="append"/> is false for a per-configuration file, which is
+    /// rewritten so that its rows always describe the same 30 runs as the
+    /// figures beside it.
+    /// </para>
     /// </summary>
-    public CsvRecorder(string path)
+    public CsvRecorder(string path, bool append = true)
     {
         Path = path;
 
@@ -116,7 +121,7 @@ public sealed class CsvRecorder : IDisposable
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        Appending = File.Exists(path) && new FileInfo(path).Length > 0;
+        Appending = append && File.Exists(path) && new FileInfo(path).Length > 0;
         if (Appending)
         {
             string? existingHeader = File.ReadLines(path).FirstOrDefault();
@@ -129,8 +134,9 @@ public sealed class CsvRecorder : IDisposable
         }
 
         // Flushed per row: a long invocation that is interrupted must leave every
-        // completed run on disk.
-        _writer = new StreamWriter(path, append: true) { AutoFlush = true };
+        // completed run on disk. Not appending means truncating, which is what
+        // gives a per-configuration file exactly its own 90 rows.
+        _writer = new StreamWriter(path, append: Appending) { AutoFlush = true };
 
         if (!Appending)
             _writer.WriteLine(Header);
@@ -160,6 +166,71 @@ public sealed class CsvRecorder : IDisposable
     }
 
     public void Dispose() => _writer.Dispose();
+
+    // ------------------------------------------------------------ combining
+
+    /// <summary>
+    /// Concatenates per-configuration files into one spanning file, with the
+    /// header written once, and returns the number of data rows written.
+    /// <para>
+    /// <b>Derived output.</b> The per-configuration files are the record; this
+    /// one is rebuilt from them in full every time, so it cannot drift and can
+    /// be regenerated without re-running an experiment. It exists because
+    /// <c>grid_size</c> and <c>obstacle_density</c> are columns, which makes one
+    /// file spanning the whole matrix directly loadable by a statistics tool.
+    /// </para>
+    /// <para>
+    /// A source whose header does not match is an error rather than something to
+    /// skip quietly: it means the file was produced by a different schema, and
+    /// silently omitting it would understate the data set.
+    /// </para>
+    /// </summary>
+    public static int WriteCombined(IEnumerable<string> sourcePaths, string combinedPath)
+    {
+        string? directory = System.IO.Path.GetDirectoryName(combinedPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
+        int rows = 0;
+
+        // Written to a temporary file first, then moved into place: a source
+        // list that includes the destination would otherwise read what it is
+        // still writing.
+        string temporaryPath = combinedPath + ".tmp";
+        using (var writer = new StreamWriter(temporaryPath, append: false))
+        {
+            writer.WriteLine(Header);
+
+            foreach (string sourcePath in sourcePaths)
+            {
+                if (!File.Exists(sourcePath))
+                    continue;
+
+                bool first = true;
+                foreach (string line in File.ReadLines(sourcePath))
+                {
+                    if (first)
+                    {
+                        first = false;
+                        if (line != Header)
+                            throw new InvalidDataException(
+                                $"{sourcePath} has a different set of columns, so it cannot be " +
+                                $"combined.\n  found:    {line}\n  expected: {Header}");
+                        continue;
+                    }
+
+                    if (line.Length == 0)
+                        continue;
+
+                    writer.WriteLine(line);
+                    rows++;
+                }
+            }
+        }
+
+        File.Move(temporaryPath, combinedPath, overwrite: true);
+        return rows;
+    }
 
     // ----------------------------------------------------------- Excel view
 

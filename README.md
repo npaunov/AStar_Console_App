@@ -19,30 +19,40 @@ dotnet --version        # 10.0.x
 The project targets `net10.0`, so it needs Visual Studio 2026 or the `dotnet`
 CLI; Visual Studio 2022 cannot target it.
 
-## Running one configuration
+## Running
 
 ```
 dotnet run -c Release
 ```
 
-Three prompts follow — grid size, obstacle density, movement model — and the
-movement model fixes the algorithm set:
+The first prompt asks whether to run **the full matrix — all 40
+configurations**. Answer `y` and it runs everything unattended; answer `n` (the
+default on a bare Enter) and three prompts follow — grid size, obstacle density,
+movement model — for one configuration.
+
+The full matrix is 40 configurations × 30 maps × 3 algorithms = **3,600 measured
+executions and 1,200 figures**, and takes **under a minute**. Configurations run
+smallest grid first, so a problem surfaces on a 50 × 50 grid in seconds rather
+than after the 500 × 500 work.
+
+The movement model fixes the algorithm set:
 
 | Movement model | Algorithms compared |
 |---|---|
 | 4-directional | Dijkstra, A* Manhattan, A* Euclidean |
 | 8-directional (diagonal = √2) | Dijkstra, A* Octile, A* Euclidean |
 
-One invocation runs **30 independently generated maps × 3 algorithms = 90
-measured executions**, appends 90 rows to `runs.csv`, writes 30 three-panel
-composite figures, and refreshes `runs_excel.csv` and `environment.md` beside
-them. It takes about 3 seconds at 500×500, including all the figures.
+Each configuration runs **30 independently generated maps × 3 algorithms = 90
+measured executions** and writes its own `runs.csv`, `runs_excel.csv` and 30
+three-panel composite figures into a directory of its own. At 500×500, the worst
+case, that takes about 3 seconds including all the figures.
 
-The prompts are a fixed menu, so a configuration can also be supplied on stdin
-— grid size, density, model, one per line:
+The prompts are a fixed menu, so a run can be scripted on stdin — the full-matrix
+answer, then grid size, density and model if it was `n`:
 
 ```
-printf '1\n3\n2\n' | dotnet run -c Release      # 50x50, 20 %, 8-directional
+printf 'y\n'            | dotnet run -c Release   # everything
+printf 'n\n1\n3\n2\n'   | dotnet run -c Release   # 50x50, 20 %, 8-directional
 ```
 
 **`-c Release` is not optional for anything you intend to measure.** A Debug
@@ -85,16 +95,31 @@ reproducible from a master seed, and the figures are large. The one exception is
 `methodology.md`, which is written by hand rather than generated and is kept
 under version control alongside the data it describes.
 
-What lands there:
+**Each configuration gets its own self-contained directory**, named for the
+configuration it holds — so a folder can be opened, read and sent on without
+anything else beside it:
+
+```
+Results/
+  size50_density0_4dir/      runs.csv, runs_excel.csv, run01.png … run30.png
+  size50_density0_8dir/      runs.csv, runs_excel.csv, run01.png … run30.png
+  …                          40 directories after a full-matrix run
+  runs.csv                   every configuration in one file
+  runs_excel.csv             its spreadsheet view
+  environment.md             the measurement environment
+  methodology.md             how it was all done
+  demo/                      throwaway output of --demo
+```
 
 | File | What it is |
 |---|---|
-| `runs.csv` | **The data.** 25 columns, one row per execution, appended across invocations. Comma-delimited, dot decimals, invariant culture. |
-| `runs_excel.csv` | Derived, **view-only** copy: semicolon-delimited with comma decimals, for double-clicking on a comma-decimal locale. Rewritten in full after every run. Never read back. |
+| `<configuration>/runs.csv` | **The data**, 90 rows for that configuration. 25 columns, one row per execution, comma-delimited, dot decimals, invariant culture. Rewritten on a re-run, so its rows always describe the same 30 runs as the figures beside it. |
+| `<configuration>/runs_excel.csv` | Derived, **view-only** copy: semicolon-delimited with comma decimals, for double-clicking on a comma-decimal locale. Never read back. |
+| `<configuration>/run01.png …` | 30 three-panel composites: Dijkstra, the model's primary heuristic and Euclidean, side by side on the same map. |
+| `runs.csv` at the root | Every configuration found on disk, concatenated into one file with the header once — 3,600 rows after a full matrix. `grid_size` and `obstacle_density` are columns, so this is the file a statistics tool loads directly. **Derived:** rebuilt from the per-configuration files on every run, so it cannot drift. |
+| `runs_excel.csv` at the root | The same, as a spreadsheet view. |
 | `environment.md` | Machine-generated technical report: language, runtime, build configuration, OS, CPU, cores, RAM, the timing clock's actual resolution, and the runtime settings that affect timings. |
-| `methodology.md` | How the experiments are conducted and how the numbers must be read, in English and Bulgarian. The companion document to `runs.csv` — hand-written, and the only file here that is committed. |
-| `figures/size<N>_density<D>_<M>dir/run01.png …` | 30 three-panel composites per configuration: Dijkstra, the model's primary heuristic and Euclidean, side by side on the same map. |
-| `demo/astar_vs_dijkstra.png` | Throwaway output of `--demo`, overwritten every time. |
+| `methodology.md` | How the experiments are conducted and how the numbers must be read, in English and Bulgarian. Hand-written, and the only file here that is committed. |
 
 ## Flags
 
@@ -104,7 +129,7 @@ What lands there:
 | `--no-figures` | Run the experiment without drawing anything. |
 | `--scale N` | Override the pixels-per-cell the figure-scale table would pick. |
 | `--no-warmup` | Skip the JIT warmup pass, so its effect can be measured. The timings this produces are not measurements. |
-| `--excel-only` | Rewrite `runs_excel.csv` from the existing `runs.csv` and run nothing else. |
+| `--excel-only` | Rebuild every spreadsheet view on disk — one per configuration, plus the root pair — and run nothing else. |
 | `--environment` | Rewrite `environment.md` and run nothing else. |
 | `--demo` | The single-map walkthrough: one environment, three searches, the ASCII grid and one composite figure. A diagnostic, not a measurement — it has no warmup pass by design, so its `TIME` row measures JIT compilation as much as the algorithm. |
 | `--selftest` | 38 known-answer checks. No output files. |

@@ -13,8 +13,9 @@ Bulgarian version below / Версия на български по-долу.
 A .NET 10 console program, C# 14, with **no third-party libraries** — the .NET
 base class library only, including the PNG encoder that writes the figures.
 
-One invocation runs exactly **one configuration**. It prompts for three fixed
-choices and derives everything else:
+The program first asks whether to run the **full matrix** — all 40
+configurations, unattended. Declining that, it runs exactly one configuration,
+prompted for as three fixed choices:
 
 1. **Grid size** — 50×50, 100×100, 250×250 or 500×500 (grids are square)
 2. **Obstacle density** — 0 %, 10 %, 20 %, 30 % or 40 %
@@ -38,8 +39,11 @@ for run in 1..30
 ```
 
 **30 independently generated maps × 3 algorithms = 90 measured executions = 90
-rows appended to `runs.csv`**, plus 30 figures. The full matrix is
-4 sizes × 5 densities × 2 models = 40 configurations = 3,600 rows.
+rows**, plus 30 figures, written into a directory named for that configuration.
+The full matrix is 4 sizes × 5 densities × 2 models = 40 configurations =
+**3,600 rows and 1,200 figures**, and completes in under a minute.
+Configurations run smallest grid first, so a problem surfaces on a 50 × 50 grid
+rather than after the 500 × 500 work.
 
 All 90 executions of a run share **one** `(map, start, goal)` triple, so the
 three algorithms always solve a byte-identical problem instance. The movement
@@ -320,8 +324,11 @@ Scale, overridable with `--scale N`:
 | 250×250 | 3 | 750×750 | ~2270×810 |
 | 500×500 | 2 | 1000×1000 | ~3020×1060 |
 
-Files are written to `figures/size<N>_density<D>_<M>dir/run01.png` …
-`run30.png`, zero-padded so a directory listing sorts in run order.
+Files are written as `run01.png` … `run30.png`, zero-padded so a directory
+listing sorts in run order, inside the configuration's own directory —
+`size<N>_density<D>_<M>dir/` — alongside that configuration's CSV pair. A
+configuration's directory is therefore self-contained: the data and the pictures
+of the same 30 runs, and nothing else.
 
 **The figures are rendered from the timed run itself, not from a re-run.** The
 explored set a panel draws *is* the closed-set array the search maintained for
@@ -332,14 +339,24 @@ run's first search is preceded by a full blocking collection anyway, so
 rendering cannot leak into a measurement. At 500×500 — the worst case — a whole
 configuration including all 30 composites costs about 3 seconds.
 
-## 12. The data file
+## 12. The data files
 
 `runs.csv` is the study's data: **comma-delimited, dot decimals, every numeric
-field written with the invariant culture**, one row per execution, appended
-across invocations with the header written once. One file is meant to span all
-40 configurations, since `grid_size` and `obstacle_density` are columns. The
-program **refuses to append** to a file whose header differs from the one it
-would write, rather than corrupting the only data set.
+field written with the invariant culture**, one row per execution, with the
+header written once.
+
+It exists at two levels, with identical columns:
+
+- **Per configuration**, in that configuration's own directory: its 90 rows,
+  beside the 30 figures of the same runs. This is the record. Re-running a
+  configuration rewrites it, so its rows and its pictures always describe the
+  same 30 runs.
+- **At the results root**, spanning everything on disk: 3,600 rows for the full
+  matrix. `grid_size` and `obstacle_density` are columns, so this is the file to
+  load for statistics. It is **derived** — rebuilt by concatenating the
+  per-configuration files after every run, so it always covers exactly what is
+  present and cannot drift. A part whose header does not match is an error
+  rather than something skipped quietly, which would understate the data set.
 
 25 columns, in order:
 
@@ -363,8 +380,8 @@ Conventions worth knowing before parsing:
   bare hex like `0000000000001E50` parses as 1E+50 in a spreadsheet and the
   value is destroyed silently.
 - `master_seed` is not part of the twelve required columns; it is first in the
-  row because a file that accumulates across invocations cannot assume every
-  invocation used the same one.
+  row because a file spanning configurations run at different times cannot
+  assume every one of them used the same seed.
 - Empty means not measured — see section 8.
 
 `runs_excel.csv` beside it is a **derived, view-only copy**: semicolon-delimited
@@ -584,8 +601,9 @@ configuration and must not be quoted as a general constant.**
 стандартната библиотека на .NET, включително и за кодирането на PNG
 изображенията.
 
-Едно изпълнение обработва точно **една конфигурация**. Програмата задава три
-фиксирани въпроса и извежда всичко останало от отговорите:
+Програмата първо пита дали да бъде изпълнена **пълната матрица** — всичките 40
+конфигурации, без намеса. При отказ се обработва точно една конфигурация, зададена
+чрез три фиксирани въпроса:
 
 1. **Размер на решетката** — 50×50, 100×100, 250×250 или 500×500 (решетките са
    квадратни)
@@ -610,8 +628,11 @@ configuration and must not be quoted as a general constant.**
 ```
 
 **30 независимо генерирани среди × 3 алгоритъма = 90 измервани изпълнения = 90
-реда, добавени към `runs.csv`**, плюс 30 фигури. Пълната матрица е
-4 размера × 5 плътности × 2 модела = 40 конфигурации = 3600 реда.
+реда**, плюс 30 фигури, записани в директория, наречена на самата конфигурация.
+Пълната матрица е 4 размера × 5 плътности × 2 модела = 40 конфигурации =
+**3600 реда и 1200 фигури**, и завършва за по-малко от минута. Конфигурациите се
+изпълняват от най-малката решетка нататък, така че евентуален проблем се
+проявява при 50 × 50, а не след работата при 500 × 500.
 
 И трите алгоритъма в едно изпълнение работят върху **една и съща** тройка
 `(среда, начало, цел)`, тоест решават напълно идентична задача. Моделът на
@@ -904,8 +925,11 @@ MEMORY: 9.84 MB                   MEMORY: 1.12 MB
 | 250×250 | 3 | 750×750 | ~2270×810 |
 | 500×500 | 2 | 1000×1000 | ~3020×1060 |
 
-Файловете се записват в `figures/size<N>_density<D>_<M>dir/run01.png` …
-`run30.png`, с водеща нула, за да се подреждат по реда на изпълненията.
+Файловете се записват като `run01.png` … `run30.png`, с водеща нула, за да се
+подреждат по реда на изпълненията, в собствената директория на конфигурацията —
+`size<N>_density<D>_<M>dir/` — заедно с двойката CSV файлове на същата
+конфигурация. Така директорията на една конфигурация е самостойна: данните и
+картините на едни и същи 30 изпълнения, и нищо друго.
 
 **Фигурите се изчертават от самото измерено изпълнение, а не от повторно
 изпълнение.** Множеството от обходени клетки, което се изчертава, *е* масивът на
@@ -918,15 +942,25 @@ MEMORY: 9.84 MB                   MEMORY: 1.12 MB
 може да попадне в измерване. При 500×500, най-тежкия случай, цяла конфигурация
 заедно с всичките 30 съставни изображения отнема около 3 секунди.
 
-## 12. Файлът с данните
+## 12. Файловете с данните
 
 `runs.csv` е данните на изследването: **разделител запетая, десетичен знак точка,
 всяко числово поле записано с инвариантната култура**, по един ред на изпълнение,
-добавяни между отделните стартирания, като заглавният ред се записва само веднъж.
-Един файл е предвиден да обхване всичките 40 конфигурации, тъй като `grid_size` и
-`obstacle_density` са колони. Програмата **отказва да добавя** към файл, чийто
-заглавен ред се различава от този, който би записала, вместо да повреди
-единствения набор от данни.
+като заглавният ред се записва само веднъж.
+
+Файлът съществува на две нива, с еднакви колони:
+
+- **За всяка конфигурация**, в собствената ѝ директория: нейните 90 реда, до
+  30-те фигури на същите изпълнения. Това е записът. Повторното изпълнение на
+  конфигурацията го пренаписва, така че редовете и картините винаги описват едни
+  и същи 30 изпълнения.
+- **В корена на резултатите**, обхващащ всичко на диска: 3600 реда при пълната
+  матрица. `grid_size` и `obstacle_density` са колони, затова именно този файл
+  се зарежда за статистическа обработка. Той е **производен** — сглобява се
+  наново от файловете на отделните конфигурации след всяко изпълнение, така че
+  винаги покрива точно наличното и не може да се разминава. Съставна част с
+  различен заглавен ред е грешка, а не нещо, което се пропуска мълчаливо, тъй
+  като това би занижило набора от данни.
 
 25 колони, в следния ред:
 
@@ -952,7 +986,7 @@ allocated_bytes, success, optimal_cost_match, cost_deviation
   Префиксът не е украса: чисти шестнадесетични цифри като `0000000000001E50` се
   разчитат от електронна таблица като 1E+50 и стойността се губи безшумно.
 - `master_seed` не е една от дванадесетте задължителни колони; тя е първа в реда,
-  защото файл, който се допълва между отделните стартирания, не може да
+  защото файл, обхващащ конфигурации, изпълнени по различно време, не може да
   предполага, че всички те са използвали едно и също главно начално число.
 - Празно означава „не е измерено“ — виж раздел 8.
 

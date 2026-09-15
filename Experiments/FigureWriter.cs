@@ -19,20 +19,20 @@ public sealed class FigureWriter
     /// <summary>Scale meaning "use the figure-scale table for this grid size".</summary>
     public const int AutoScale = 0;
 
-    /// <summary>All of a configuration's figures live in one directory.</summary>
-    private const string FiguresFolder = "figures";
-
     private readonly int _scale;
 
     public FigureWriter(string resultsDirectory, Configuration configuration, int scale = AutoScale)
     {
         if (scale != AutoScale && scale < 1) throw new ArgumentOutOfRangeException(nameof(scale));
 
-        OutputDirectory = Path.Combine(resultsDirectory, FiguresFolder, configuration.Slug);
+        OutputDirectory = configuration.DirectoryIn(resultsDirectory);
         _scale = scale;
     }
 
-    /// <summary>Where this configuration's figures go; created on the first write.</summary>
+    /// <summary>
+    /// Where this configuration's figures go, alongside its CSV pair; created on
+    /// the first write.
+    /// </summary>
     public string OutputDirectory { get; }
 
     public int FiguresWritten { get; private set; }

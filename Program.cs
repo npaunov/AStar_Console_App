@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using AStar;
 using AStar.Core;
@@ -69,7 +70,7 @@ class Program
         // Refreshing the viewing copy and probing the machine both run no
         // experiment, so they come before anything that would prompt.
         if (options.ExcelOnly)
-            return WriteExcelView(options.ResultsDirectory);
+            return RefreshExcelViews(options.ResultsDirectory);
 
         if (options.EnvironmentOnly)
             return WriteEnvironmentReport(options.ResultsDirectory, options.MasterSeed);
@@ -101,13 +102,47 @@ class Program
     }
 
     /// <summary>
-    /// Rewrites the spreadsheet viewing copy from the canonical
-    /// <c>runs.csv</c>, covering every configuration accumulated so far.
+    /// Rebuilds every spreadsheet view on disk — one per configuration
+    /// directory, plus the spanning pair at the root — without running an
+    /// experiment. How a results tree that predates the feature gets a view.
     /// </summary>
-    static int WriteExcelView(string resultsDirectory)
+    static int RefreshExcelViews(string resultsDirectory)
     {
-        string canonicalPath = Path.Combine(resultsDirectory, RunsFileName);
-        string excelPath = Path.Combine(resultsDirectory, ExcelFileName);
+        int refreshed = 0;
+
+        foreach (var configuration in ExperimentMatrix.All())
+        {
+            string csvPath = Path.Combine(configuration.DirectoryIn(resultsDirectory), RunsFileName);
+            if (!File.Exists(csvPath))
+                continue;
+
+            int code = WriteExcelCopyOf(csvPath, quiet: true);
+            if (code != Ok)
+                return code;
+            refreshed++;
+        }
+
+        if (refreshed == 0)
+        {
+            Console.Error.WriteLine(
+                $"No {RunsFileName} found in any configuration directory under {resultsDirectory} " +
+                $"— run a configuration first.");
+            return OutputFailed;
+        }
+
+        Console.WriteLine($"{refreshed} per-configuration spreadsheet view(s) rewritten.");
+        return WriteCombinedView(resultsDirectory, ExperimentMatrix.All());
+    }
+
+    /// <summary>
+    /// Rewrites the spreadsheet viewing copy beside one <c>runs.csv</c>.
+    /// <paramref name="quiet"/> suppresses the note during a batch, where it
+    /// would otherwise repeat once per configuration.
+    /// </summary>
+    static int WriteExcelCopyOf(string canonicalPath, bool quiet = false)
+    {
+        string excelPath = Path.Combine(
+            Path.GetDirectoryName(canonicalPath) ?? "", ExcelFileName);
 
         try
         {
@@ -120,24 +155,73 @@ class Program
             return OutputFailed;
         }
 
-        Console.WriteLine($"Spreadsheet view written to {excelPath}");
-        Console.WriteLine("Semicolon-delimited with comma decimals, for viewing only — " +
-                          $"{RunsFileName} stays the data file. Do not save over either from a spreadsheet.");
+        if (!quiet)
+        {
+            Console.WriteLine($"Spreadsheet view written to {excelPath}");
+            Console.WriteLine("Semicolon-delimited with comma decimals, for viewing only — " +
+                              $"{RunsFileName} stays the data file. Do not save over either from a spreadsheet.");
+        }
+
         return Ok;
+    }
+
+    /// <summary>
+    /// Rebuilds the spanning CSV pair at the results root from the
+    /// per-configuration files, so one directly loadable file covers everything
+    /// on disk.
+    /// </summary>
+    static int WriteCombinedView(string resultsDirectory, IReadOnlyList<Configuration> configurations)
+    {
+        string combinedPath = Path.Combine(resultsDirectory, RunsFileName);
+
+        // Every configuration that has a file, not merely the ones just run, so
+        // the spanning file still covers the whole matrix after a single
+        // configuration is re-run on its own.
+        var sources = ExperimentMatrix.All()
+            .Select(configuration => Path.Combine(configuration.DirectoryIn(resultsDirectory), RunsFileName))
+            .Where(File.Exists)
+            .ToArray();
+
+        int rows;
+        try
+        {
+            rows = CsvRecorder.WriteCombined(sources, combinedPath);
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return OutputFailed;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"{rows.ToString("N0", CultureInfo.InvariantCulture)} rows from " +
+                          $"{sources.Length} configuration(s) combined into {combinedPath}");
+
+        return WriteExcelCopyOf(combinedPath);
     }
 
     // ------------------------------------------------------------- harness
 
     /// <summary>
-    /// Prompts for one configuration and runs it. Fixed menus, no free text: the
-    /// matrix is the experiment design and typing into it is not a feature.
+    /// Asks whether to run the whole matrix or one configuration, then runs what
+    /// was chosen. Fixed menus, no free text: the matrix is the experiment
+    /// design and typing into it is not a feature.
     /// </summary>
     static int RunHarness(Options options)
     {
+        var everything = ExperimentMatrix.All();
+
         Console.WriteLine("A* versus Dijkstra — experiment harness");
         Console.WriteLine("=======================================");
         Console.WriteLine($"Master seed {options.MasterSeed.ToString(CultureInfo.InvariantCulture)} " +
                           $"(override with --seed N)");
+
+        if (!TryConfirm($"Run the full matrix — all {everything.Length} configurations", out bool full))
+            return InputClosed;
+
+        if (full)
+            return RunConfigurations(options, everything);
 
         if (!TryChoose("Grid size", ExperimentMatrix.GridSizes,
                 size => $"{size} x {size}", out int chosenSize))
@@ -151,65 +235,142 @@ class Program
         if (!TryChoose("Movement model", ExperimentMatrix.Models, Describe, out var chosenModel))
             return InputClosed;
 
-        var configuration = new Configuration(chosenSize, chosenDensity, chosenModel);
-        string csvPath = Path.Combine(options.ResultsDirectory, RunsFileName);
+        return RunConfigurations(options, new[] { new Configuration(chosenSize, chosenDensity, chosenModel) });
+    }
 
-        FigureWriter? figures = null;
-        if (options.Figures)
+    /// <summary>
+    /// Runs each configuration into its own directory — its CSV pair and its 30
+    /// figures together — then rebuilds the spanning CSV pair and the
+    /// environment report at the results root.
+    /// </summary>
+    static int RunConfigurations(Options options, IReadOnlyList<Configuration> configurations)
+    {
+        bool batch = configurations.Count > 1;
+        if (batch)
+            PrintBatchPlan(options, configurations);
+
+        var started = Stopwatch.StartNew();
+        int totalRows = 0;
+        int totalFigures = 0;
+        int totalEndpointFailures = 0;
+        int configurationsFailingCrossCheck = 0;
+        double worstDeviation = 0;
+
+        for (int i = 0; i < configurations.Count; i++)
         {
-            figures = new FigureWriter(options.ResultsDirectory, configuration, options.Scale);
+            var configuration = configurations[i];
+            string directory = configuration.DirectoryIn(options.ResultsDirectory);
+            string csvPath = Path.Combine(directory, RunsFileName);
+
             Console.WriteLine();
-            Console.WriteLine($"Figures:   {figures.OutputDirectory}");
+            if (batch)
+                Console.WriteLine($"--- {i + 1} of {configurations.Count} ---");
+            Console.WriteLine($"Output:    {directory}");
 
-            // Re-running the same configuration at the same master seed rewrites
-            // identical files, but at a different seed the figures would be
-            // replaced while runs.csv kept both — worth one line of warning.
-            int existing = figures.ExistingFigureCount;
-            if (existing > 0)
-                Warn($"{existing} figure(s) already there and will be overwritten.");
+            FigureWriter? figures = null;
+            if (options.Figures)
+            {
+                figures = new FigureWriter(options.ResultsDirectory, configuration, options.Scale);
+
+                // Re-running rewrites runNN.png. Identical at the same master
+                // seed, and replaced at a different one — worth one line.
+                int existing = figures.ExistingFigureCount;
+                if (existing > 0)
+                    Warn($"{existing} figure(s) already there and will be overwritten.");
+            }
+
+            InvocationSummary summary;
+            try
+            {
+                // append: false — this file describes the same 30 runs as the
+                // figures beside it, so a re-run replaces it rather than
+                // doubling its rows.
+                using var recorder = new CsvRecorder(csvPath, append: false);
+                summary = new ExperimentRunner(configuration, options.MasterSeed, options.Warmup)
+                    .Run(recorder, figures);
+            }
+            catch (Exception exception) when (
+                exception is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine(exception.Message);
+                return OutputFailed;
+            }
+
+            int viewCode = WriteExcelCopyOf(csvPath, quiet: batch);
+            if (viewCode != Ok)
+                return viewCode;
+
+            totalRows += summary.RowsWritten;
+            totalFigures += summary.FiguresWritten;
+            totalEndpointFailures += summary.EndpointFailures;
+            worstDeviation = Math.Max(worstDeviation, summary.WorstCostDeviation);
+            if (!summary.CrossCheckPassed)
+                configurationsFailingCrossCheck++;
+
+            Console.WriteLine($"{summary.RowsWritten} rows and {summary.FiguresWritten} figures in {directory}");
         }
 
-        Console.WriteLine();
+        started.Stop();
 
-        CsvRecorder recorder;
-        try
-        {
-            recorder = new CsvRecorder(csvPath);
-        }
-        catch (Exception exception) when (
-            exception is IOException or InvalidDataException or UnauthorizedAccessException)
-        {
-            Console.Error.WriteLine(exception.Message);
-            return OutputFailed;
-        }
+        // Derived from the per-configuration files that were just completed, so
+        // it always covers exactly what is on disk and can never drift.
+        int combinedCode = WriteCombinedView(options.ResultsDirectory, configurations);
+        if (combinedCode != Ok)
+            return combinedCode;
 
-        InvocationSummary summary;
-        using (recorder)
-        {
-            Console.WriteLine($"Recording to {recorder.Path} ({(recorder.Appending ? "appending" : "new file")})");
-            summary = new ExperimentRunner(configuration, options.MasterSeed, options.Warmup).Run(recorder, figures);
-        }
-
-        Console.WriteLine();
-        Console.WriteLine($"{summary.RowsWritten} rows appended to {csvPath}");
-        if (figures is not null)
-            Console.WriteLine($"{summary.FiguresWritten} figures written to {figures.OutputDirectory}");
-
-        // Always written, and only after the data is safely on disk and closed.
-        // It is derived from the file that was just completed, so the two can
-        // never be out of step.
-        int viewCode = WriteExcelView(options.ResultsDirectory);
-        if (viewCode != Ok)
-            return viewCode;
-
-        // Also unconditional, and for the same reason: a technical report that
-        // has to be remembered is one that ends up describing a different build
-        // from the one that wrote the rows above it.
+        // A technical report that has to be remembered is one that ends up
+        // describing a different build from the one that wrote the rows.
         int environmentCode = WriteEnvironmentReport(options.ResultsDirectory, options.MasterSeed);
         if (environmentCode != Ok)
             return environmentCode;
 
-        return summary.CrossCheckPassed ? Ok : CrossCheckFailed;
+        if (batch)
+            PrintBatchSummary(configurations.Count, totalRows, totalFigures, totalEndpointFailures,
+                configurationsFailingCrossCheck, worstDeviation, started.Elapsed);
+
+        return configurationsFailingCrossCheck == 0 ? Ok : CrossCheckFailed;
+    }
+
+    static void PrintBatchPlan(Options options, IReadOnlyList<Configuration> configurations)
+    {
+        int executions = configurations.Count * ExperimentMatrix.RunsPerConfiguration * 3;
+
+        Console.WriteLine();
+        Console.WriteLine($"{configurations.Count} configurations x " +
+                          $"{ExperimentMatrix.RunsPerConfiguration} maps x 3 algorithms = " +
+                          $"{executions.ToString("N0", CultureInfo.InvariantCulture)} measured executions");
+        Console.WriteLine($"Each configuration gets its own directory under {options.ResultsDirectory}, " +
+                          $"holding {RunsFileName}, {ExcelFileName} and its " +
+                          $"{ExperimentMatrix.RunsPerConfiguration} figures.");
+        if (!options.Figures)
+            Console.WriteLine("Figures are disabled for this run.");
+    }
+
+    static void PrintBatchSummary(
+        int configurations, int rows, int figures, int endpointFailures,
+        int failingCrossCheck, double worstDeviation, TimeSpan elapsed)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Full matrix complete");
+        Console.WriteLine("====================");
+        Console.WriteLine($"Configurations:  {configurations}");
+        Console.WriteLine($"Rows:            {rows.ToString("N0", CultureInfo.InvariantCulture)}");
+        Console.WriteLine($"Figures:         {figures.ToString("N0", CultureInfo.InvariantCulture)}");
+        Console.WriteLine($"Elapsed:         {elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)} s");
+
+        if (endpointFailures > 0)
+            Warn($"{endpointFailures} run(s) across the matrix had no valid endpoint pair " +
+                 $"and were recorded with empty metrics.");
+
+        Console.WriteLine();
+        Console.ForegroundColor = failingCrossCheck == 0 ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine($"Optimality cross-check across the whole matrix: " +
+                          $"{(failingCrossCheck == 0 ? "PASS" : "FAIL")} — worst relative deviation " +
+                          $"{worstDeviation.ToString("E2", CultureInfo.InvariantCulture)} " +
+                          $"(tolerance {ExperimentRunner.CostEpsilon.ToString("E0", CultureInfo.InvariantCulture)})");
+        if (failingCrossCheck > 0)
+            Console.WriteLine($"{failingCrossCheck} configuration(s) disagreed with the Dijkstra baseline.");
+        Console.ResetColor();
     }
 
     /// <summary>
@@ -222,6 +383,50 @@ class Program
         string diagonal = model.DirectionCount == 8 ? ", diagonal step costs sqrt(2)" : "";
         string algorithms = string.Join(", ", ExperimentMatrix.Variants(model).Select(ExperimentMatrix.Label));
         return $"{model.DirectionCount}-directional{diagonal} — {algorithms}";
+    }
+
+    /// <summary>
+    /// A yes/no question, defaulting to no on a bare Enter. Re-prompts until the
+    /// answer is one of the two; returns false only when stdin closes.
+    /// </summary>
+    static bool TryConfirm(string question, out bool answer)
+    {
+        Console.WriteLine();
+
+        while (true)
+        {
+            Console.Write($"{question}? [y/N]: ");
+            string? line = Console.ReadLine();
+
+            if (line is null)
+            {
+                Console.WriteLine();
+                Console.Error.WriteLine("Input closed before a choice was made.");
+                answer = false;
+                return false;
+            }
+
+            string trimmed = line.Trim();
+
+            // A bare Enter means no: the full matrix is the expensive answer and
+            // should never be what a stray keystroke selects.
+            if (trimmed.Length == 0
+                || trimmed.Equals("n", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Equals("no", StringComparison.OrdinalIgnoreCase))
+            {
+                answer = false;
+                return true;
+            }
+
+            if (trimmed.Equals("y", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Equals("yes", StringComparison.OrdinalIgnoreCase))
+            {
+                answer = true;
+                return true;
+            }
+
+            Console.WriteLine("Answer y or n.");
+        }
     }
 
     /// <summary>
