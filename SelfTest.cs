@@ -1,6 +1,7 @@
 using System.Globalization;
 using AStar.Algorithms;
 using AStar.Core;
+using AStar.Generation;
 
 namespace AStar;
 
@@ -18,6 +19,17 @@ public static class SelfTest
     /// </summary>
     private const double Epsilon = 1e-9;
 
+    /// <summary>
+    /// The map set both random-map checks run over: one configuration of the
+    /// real matrix, small enough that a failure can be inspected by hand.
+    /// </summary>
+    private const int MapCount = 40;
+    private const int MapSize = 30;
+    private const double MapDensity = 0.30;
+
+    /// <summary>Set by <see cref="Run"/>; every map below derives from it.</summary>
+    private static long _masterSeed = SeedScheme.DefaultMasterSeed;
+
     /// <summary>Relaxations performed by a stale re-pop; diagnostic only.</summary>
     private static int _rePopRelaxations;
     private static int _rePopNewDiscoveries;
@@ -29,18 +41,21 @@ public static class SelfTest
     private static int _passed;
     private static int _failed;
 
-    public static bool Run()
+    public static bool Run(long masterSeed)
     {
         _passed = 0;
         _failed = 0;
+        _masterSeed = masterSeed;
 
         Console.WriteLine("Self-test");
         Console.WriteLine("=========");
+        Console.WriteLine($"Master seed {masterSeed}");
 
         EmptyGrid();
         SingleGapWall();
         EnclosedGoal();
         DiagonalSqueeze();
+        SeededGeneration();
         AlgorithmsAgreeOnCost();
         MatchesPreRefactorImplementation();
 
@@ -165,26 +180,72 @@ public static class SelfTest
     }
 
     /// <summary>
-    /// The optimality cross-check, on random maps: Dijkstra and every A*
+    /// The reproducibility guarantee the study rests on: one seed always rebuilds
+    /// the same environment, and a neighbouring run index never rebuilds it by
+    /// accident. Also pins the obstacle count, because the generation principle
+    /// the reviewer asked to have documented is "exactly
+    /// <c>floor(density × cells)</c>, uniformly placed".
+    /// </summary>
+    private static void SeededGeneration()
+    {
+        Section($"Seeded generation ({MapSize}x{MapSize}, " +
+                $"{(MapDensity * 100).ToString("F0", CultureInfo.InvariantCulture)} % obstacles)");
+
+        ulong mapSeed = SeedScheme.MapSeed(_masterSeed, MapSize, MapSize, MapDensity, 1);
+        ulong endpointSeed = SeedScheme.EndpointSeed(_masterSeed, MapSize, MapSize, MapDensity, 1);
+
+        Check("the map seed is a pure function of its inputs",
+            mapSeed == SeedScheme.MapSeed(_masterSeed, MapSize, MapSize, MapDensity, 1));
+        Check("the next run gets a different seed",
+            mapSeed != SeedScheme.MapSeed(_masterSeed, MapSize, MapSize, MapDensity, 2));
+        Check("map and endpoint seeds are independent", mapSeed != endpointSeed);
+
+        var map = MapGenerator.Generate(MapSize, MapSize, MapDensity, mapSeed);
+        Check("the same seed rebuilds the same map",
+            SameCells(map, MapGenerator.Generate(MapSize, MapSize, MapDensity, mapSeed)));
+        Check("the next run is a different map",
+            !SameCells(map, MapGenerator.Generate(MapSize, MapSize, MapDensity,
+                SeedScheme.MapSeed(_masterSeed, MapSize, MapSize, MapDensity, 2))));
+
+        CheckEqual("obstacle count is floor(density x cells)", map.BlockedCount, 270);
+        CheckEqual("0 % density places none",
+            MapGenerator.Generate(MapSize, MapSize, 0.0, mapSeed).BlockedCount, 0);
+        CheckEqual("100 % density blocks every cell",
+            MapGenerator.Generate(MapSize, MapSize, 1.0, mapSeed).BlockedCount, MapSize * MapSize);
+
+        var pair = EndpointSampler.Sample(map, endpointSeed);
+        Check("endpoints were placed", pair.Success);
+        Check("start and goal are free cells",
+            map.IsFree(pair.Start.x, pair.Start.y) && map.IsFree(pair.Goal.x, pair.Goal.y));
+        Check($"they are at least half the diagonal apart " +
+              $"({pair.MinSeparation.ToString("F1", CultureInfo.InvariantCulture)} cells)",
+            Separation(pair.Start, pair.Goal) >= pair.MinSeparation);
+        Check("the same seed redraws the same pair",
+            EndpointSampler.Sample(map, endpointSeed) == pair);
+    }
+
+    /// <summary>
+    /// The optimality cross-check, on generated maps: Dijkstra and every A*
     /// variant must return the same cost whenever a route exists, and A* with a
     /// real heuristic must never expand more nodes than the baseline.
     /// </summary>
     private static void AlgorithmsAgreeOnCost()
     {
-        Section("Dijkstra and A* agree on cost (40 random maps, 8-dir)");
+        Section($"Dijkstra and A* agree on cost ({MapCount} generated maps, 8-dir)");
 
-        var rand = new Random(20260915);
         var model = MovementModel.EightDirectional;
-        (int x, int y) start = (0, 0);
-        (int x, int y) goal = (29, 29);
 
         double worstDeviation = 0;
         int routesFound = 0;
         int octileNeverWorse = 0;
 
-        for (int map = 0; map < 40; map++)
+        for (int map = 1; map <= MapCount; map++)
         {
-            var grid = DemoMap.Random(30, 30, 300, rand, start, goal);
+            if (!TryGenerate(map, out var grid, out var start, out var goal, out string failure))
+            {
+                Fail($"map {map}: {failure}");
+                return;
+            }
 
             var baseline = new DijkstraPathfinder().Search(grid, start, goal, model);
             var octile = Search(Heuristic.Octile, grid, start, goal, model);
@@ -207,7 +268,7 @@ public static class SelfTest
                 octileNeverWorse++;
         }
 
-        Check($"routes found on {routesFound} of 40 maps", routesFound > 0);
+        Check($"routes found on {routesFound} of {MapCount} maps", routesFound > 0);
         Check($"worst cost deviation {worstDeviation.ToString("E2", CultureInfo.InvariantCulture)} within {Epsilon:E0}",
             worstDeviation <= Epsilon);
         CheckEqual("octile never expands more than Dijkstra", octileNeverWorse, routesFound);
@@ -238,7 +299,7 @@ public static class SelfTest
     /// </summary>
     private static void MatchesPreRefactorImplementation()
     {
-        Section("Matches the pre-refactor implementation (40 random maps)");
+        Section($"Matches the pre-refactor implementation ({MapCount} generated maps)");
 
         // Part 1: against the original exactly as it was — no closed-set guard.
         // Both must find an optimal route on every map. Nothing stronger is
@@ -249,7 +310,7 @@ public static class SelfTest
                           $"{_rePopNewDiscoveries} of them genuine discoveries, largest apparent " +
                           $"improvement {_worstRePopImprovement.ToString("E3", CultureInfo.InvariantCulture)} " +
                           $"— rounding noise, not a better route");
-        Console.WriteLine($"  INFO  expanded-node counts differ on {_mapsWithDifferentExpansion} of 40 maps, " +
+        Console.WriteLine($"  INFO  expanded-node counts differ on {_mapsWithDifferentExpansion} of {MapCount} maps, " +
                           $"from {_mostFewerExpansions} to +{_mostExtraExpansions} cells: at 1e-15 the noise " +
                           $"perturbs f, which perturbs pop order. The guard makes this deterministic.");
 
@@ -261,16 +322,13 @@ public static class SelfTest
     }
 
     /// <summary>
-    /// Runs the reference and the current implementation over the same 40 maps
-    /// and compares them. Returns false on the first mismatch, having reported
-    /// it.
+    /// Runs the reference and the current implementation over the same generated
+    /// maps and compares them. Returns false on the first mismatch, having
+    /// reported it.
     /// </summary>
     private static bool CompareWithReference(bool closedGuard, bool exact)
     {
-        var rand = new Random(20260915);   // same seed, so the same 40 maps
         var model = MovementModel.EightDirectional;
-        (int x, int y) start = (0, 0);
-        (int x, int y) goal = (29, 29);
 
         _rePopRelaxations = 0;
         _rePopNewDiscoveries = 0;
@@ -279,9 +337,12 @@ public static class SelfTest
         _mostFewerExpansions = 0;
         _mostExtraExpansions = 0;
 
-        for (int map = 0; map < 40; map++)
+        // Each map is derived from the master seed and its run index, so the two
+        // passes see byte-identical maps without sharing a generator.
+        for (int map = 1; map <= MapCount; map++)
         {
-            var grid = DemoMap.Random(30, 30, 300, rand, start, goal);
+            if (!TryGenerate(map, out var grid, out var start, out var goal, out string failure))
+                return Mismatch($"map {map}: {failure}");
 
             var (legacyPath, legacyExplored) = ReferenceAStar(grid, start, goal, closedGuard);
             var current = Search(Heuristic.Octile, grid, start, goal, model);
@@ -463,6 +524,42 @@ public static class SelfTest
     }
 
     // ------------------------------------------------------------- plumbing
+
+    /// <summary>
+    /// Builds map number <paramref name="run"/> and its endpoints exactly the way
+    /// the experiment harness will, so a self-test failure names a run index that
+    /// can be regenerated on demand.
+    /// </summary>
+    private static bool TryGenerate(
+        int run, out Grid grid, out (int x, int y) start, out (int x, int y) goal, out string failure)
+    {
+        grid = MapGenerator.Generate(MapSize, MapSize, MapDensity,
+            SeedScheme.MapSeed(_masterSeed, MapSize, MapSize, MapDensity, run));
+
+        var endpoints = EndpointSampler.Sample(grid,
+            SeedScheme.EndpointSeed(_masterSeed, MapSize, MapSize, MapDensity, run));
+
+        start = endpoints.Start;
+        goal = endpoints.Goal;
+        failure = endpoints.Failure ?? "";
+        return endpoints.Success;
+    }
+
+    /// <summary>True when two maps block exactly the same cells.</summary>
+    private static bool SameCells(Grid a, Grid b)
+    {
+        if (a.Width != b.Width || a.Height != b.Height)
+            return false;
+
+        for (int y = 0; y < a.Height; y++)
+            for (int x = 0; x < a.Width; x++)
+                if (a.IsBlocked(x, y) != b.IsBlocked(x, y))
+                    return false;
+        return true;
+    }
+
+    private static double Separation((int x, int y) a, (int x, int y) b) =>
+        Math.Sqrt((double)(a.x - b.x) * (a.x - b.x) + (double)(a.y - b.y) * (a.y - b.y));
 
     private static SearchResult Search(
         Heuristic heuristic, Grid grid, (int x, int y) start, (int x, int y) goal, MovementModel model) =>
