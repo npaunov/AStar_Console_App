@@ -1,10 +1,15 @@
 namespace AStar.Rendering;
 
 /// <summary>
-/// The original ASCII grid view, kept for small demo grids only and now called
-/// once at the end of a run instead of once per node expansion. Column headers
-/// are numeric: the old <c>(char)('A' + x)</c> labels ran past 'Z' at 26
-/// columns, so the 30-wide demo grid printed its goal as "^30".
+/// The ASCII grid view, for small demo grids only, called once at the end of a
+/// run rather than once per node expansion.
+/// <para>
+/// Takes the same <c>bool[y, x]</c> obstacle mask the image renderer takes, so
+/// nothing here depends on the search internals, and neither width nor height
+/// is threaded through the signature — both come off the mask. Column headers
+/// are numeric: the original <c>(char)('A' + x)</c> labels ran past 'Z' at 26
+/// columns and printed the 30-wide demo grid's goal as "^30".
+/// </para>
 /// </summary>
 public static class ConsoleGridRenderer
 {
@@ -20,43 +25,45 @@ public static class ConsoleGridRenderer
     public static string FormatCoord((int x, int y) coord) => $"({coord.x},{coord.y})";
 
     /// <summary>
-    /// Prints the grid with cell weights, obstacles, the path and the explored
-    /// set. <paramref name="path"/> and <paramref name="explored"/> are optional.
+    /// Prints obstacles, the explored set, the path and the endpoints. Both
+    /// <paramref name="path"/> and <paramref name="explored"/> are optional.
+    /// Free cells are left blank so that the obstacles and the searched region
+    /// are what the eye picks up.
     /// </summary>
     public static void PrintGrid(
-        int[,] grid,
-        int[,] cellCost,
-        List<(int, int)>? path,
-        HashSet<(int, int)>? explored,
+        bool[,] blocked,
+        IEnumerable<(int x, int y)>? path,
+        IEnumerable<(int x, int y)>? explored,
         (int x, int y) start,
-        (int x, int y) goal,
-        int width,
-        int height,
-        bool showPath)
+        (int x, int y) goal)
     {
+        int height = blocked.GetLength(0);
+        int width = blocked.GetLength(1);
+
         // Hashed once up front; the original re-scanned the whole path list for
         // every cell of every repaint.
-        var pathCells = showPath && path is not null ? new HashSet<(int, int)>(path) : null;
+        var pathCells = path is null ? null : new HashSet<(int, int)>(path);
+        var exploredCells = explored is null ? null : new HashSet<(int, int)>(explored);
 
         PrintColumnHeader(width);
 
         for (int y = 0; y < height; y++)
         {
-            Console.Write($"{y,3} "); // Row label (0-based, matching the coordinates)
+            Console.Write($"{y,3} "); // Row label, 0-based to match the coordinates
             for (int x = 0; x < width; x++)
             {
                 if ((x, y) == start)
                     WriteCell("S ", ConsoleColor.Green);
                 else if ((x, y) == goal)
-                    WriteCell("G ", ConsoleColor.Green);
-                else if (grid[y, x] == 99)
+                    WriteCell("G ", ConsoleColor.Yellow);
+                else if (blocked[y, x])
                     WriteCell("@ ", ConsoleColor.Red);
                 else if (pathCells is not null && pathCells.Contains((x, y)))
-                    WriteCell("* ", ConsoleColor.Green);
-                else if (explored is not null && explored.Contains((x, y)))
-                    WriteCell(". ", ConsoleColor.DarkYellow);
+                    WriteCell("* ", ConsoleColor.Red);
+                else if (exploredCells is not null && exploredCells.Contains((x, y)))
+                    WriteCell(". ", ConsoleColor.DarkCyan);
                 else
-                    WriteCell($"{cellCost[y, x]} ", ConsoleColor.DarkBlue);
+                    Console.Write("  ");
             }
             Console.WriteLine();
         }
@@ -80,7 +87,7 @@ public static class ConsoleGridRenderer
     }
 
     /// <summary>Prints the path as a coordinate sequence, truncated if it is long.</summary>
-    public static void PrintPathSequence(List<(int, int)> path, int maxSteps = 200)
+    public static void PrintPathSequence(IReadOnlyList<(int x, int y)> path, int maxSteps = 200)
     {
         int shown = Math.Min(path.Count, maxSteps);
         for (int i = 0; i < shown; i++)
