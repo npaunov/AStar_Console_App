@@ -15,6 +15,13 @@ obj/
 /DataBase/
 filelist.txt
 
+# Experiment output: runs.csv, its spreadsheet view, the figures and the
+# machine-generated environment report. Generated data is never committed —
+# it is reproducible from a master seed, and the figures are large.
+# methodology.md is written by hand, not generated, so it is kept.
+/Results/*
+!/Results/methodology.md
+
 # IDE-specific files
 .vscode/
 .vs/

@@ -16,9 +16,9 @@ namespace AStar.Algorithms;
 /// </para>
 /// <para>
 /// Insertion is <b>add-only</b>: when a cell's cost improves, the improved
-/// entry is added and the superseded one is left in place, exactly as the
-/// original implementation did. Dead entries therefore accumulate and get
-/// popped later; the closed-set guard discards them without counting them.
+/// entry is added and the superseded one is left in place rather than being
+/// removed. Dead entries therefore accumulate and get popped later; the
+/// closed-set guard discards them without counting them.
 /// This costs time and memory but never correctness — every heuristic here is
 /// consistent, so a cell's cost is already optimal when it is first popped, and
 /// a stale entry always carries a higher f and so arrives afterwards, finding

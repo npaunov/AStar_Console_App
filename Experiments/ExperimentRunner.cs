@@ -24,8 +24,8 @@ public sealed record InvocationSummary
 /// <para>
 /// The map and the endpoint pair are generated once per run and shared by all
 /// three variants, so the comparison is on a byte-identical problem instance —
-/// which is what the reviewer asked for and what makes the optimality
-/// cross-check meaningful.
+/// which is what makes the results comparable and the optimality cross-check
+/// meaningful.
 /// </para>
 /// </summary>
 public sealed class ExperimentRunner
@@ -61,7 +61,11 @@ public sealed class ExperimentRunner
     /// </summary>
     private const int WarmupRun = 0;
 
-    /// <summary>Relative tolerance for the optimality cross-check (caveat 5.4).</summary>
+    /// <summary>
+    /// Relative tolerance for the optimality cross-check. Exact equality is the
+    /// wrong test: √2 accumulates differently depending on the order a route's
+    /// steps are assembled in.
+    /// </summary>
     public const double CostEpsilon = 1e-9;
 
     private readonly Configuration _configuration;
@@ -156,7 +160,7 @@ public sealed class ExperimentRunner
             if (!endpoints.Success)
             {
                 // Recorded, not skipped: a map too fragmented to hold a valid
-                // pair is itself a result at these densities (caveat 5.1).
+                // pair is itself a result at the higher densities.
                 endpointFailures++;
                 foreach (var pathfinder in variants)
                     recorder.Write(UnrunRecord(pathfinder, run, mapSeed, pairSeed));

@@ -7,8 +7,8 @@ namespace AStar.Rendering;
 /// Takes the same <c>bool[y, x]</c> obstacle mask the image renderer takes, so
 /// nothing here depends on the search internals, and neither width nor height
 /// is threaded through the signature — both come off the mask. Column headers
-/// are numeric: the original <c>(char)('A' + x)</c> labels ran past 'Z' at 26
-/// columns and printed the 30-wide demo grid's goal as "^30".
+/// are numeric, printed as tens over units, so they stay correct at any grid
+/// width rather than running out of letters past 26 columns.
 /// </para>
 /// </summary>
 public static class ConsoleGridRenderer
@@ -40,8 +40,8 @@ public static class ConsoleGridRenderer
         int height = blocked.GetLength(0);
         int width = blocked.GetLength(1);
 
-        // Hashed once up front; the original re-scanned the whole path list for
-        // every cell of every repaint.
+        // Hashed once up front, so each cell is a lookup rather than a scan of
+        // the whole path list.
         var pathCells = path is null ? null : new HashSet<(int, int)>(path);
         var exploredCells = explored is null ? null : new HashSet<(int, int)>(explored);
 

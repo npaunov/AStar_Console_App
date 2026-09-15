@@ -3,12 +3,10 @@ namespace AStar.Core;
 /// <summary>
 /// An occupancy grid: one bit of state per cell, free or blocked.
 /// <para>
-/// Stored as a single flat <c>bool[]</c> indexed <c>y * Width + x</c>. The
-/// original code carried two parallel <c>int[,]</c> arrays — an obstacle map and
-/// a movement-cost map — and encoded "is this cell free" three different ways
-/// (<c>== 0</c>, <c>!= 99</c>, <c>cellCost == 1</c>). The cost array was
-/// redundant: every free cell held 1, so the step cost was already uniform, and
-/// the cost model now lives entirely in <see cref="MovementModel"/>.
+/// Stored as a single flat <c>bool[]</c> indexed <c>y * Width + x</c>, with
+/// exactly one way to ask whether a cell is free. Occupancy is all a grid
+/// holds: there is no per-cell movement cost, because step costs are uniform
+/// and the cost model lives entirely in <see cref="MovementModel"/>.
 /// </para>
 /// <para>
 /// Flat indexing is also what makes 500x500 practical: the search state becomes

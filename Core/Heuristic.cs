@@ -48,9 +48,9 @@ public sealed class Heuristic
 
     /// <summary>
     /// Diagonal-aware distance, exact for 8-directional movement with a √2
-    /// diagonal. The expression is written exactly as the original code wrote
-    /// it, so the doubles it produces are identical and the refactor stays
-    /// verifiably behaviour-preserving.
+    /// diagonal. The expression is left in its expanded form rather than
+    /// simplified: the exact sequence of floating-point operations is what makes
+    /// the doubles it returns reproducible.
     /// </summary>
     public static readonly Heuristic Octile = new("OCTILE", static (ax, ay, bx, by) =>
     {

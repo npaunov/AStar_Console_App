@@ -12,21 +12,25 @@ using AStar.Rendering;
 /// configuration — grid size, obstacle density, movement model — then executes
 /// 30 independently generated environments against three algorithms, appends 90
 /// rows to <c>runs.csv</c>, writes 30 three-panel composite figures and
-/// refreshes the <c>runs_excel.csv</c> viewing copy beside it. <c>--demo</c>
-/// runs the original single-map walkthrough instead,
-/// which prints the grid and renders the three-panel figure; <c>--selftest</c>
-/// runs the known-answer checks.
+/// refreshes the <c>runs_excel.csv</c> viewing copy and the
+/// <c>environment.md</c> technical report beside it. <c>--demo</c>
+/// runs a single-map walkthrough instead, which prints the grid and renders
+/// one three-panel figure; <c>--selftest</c> runs the known-answer checks.
 /// </para>
 /// </summary>
 class Program
 {
-    // Where generated artefacts go. The study's outputs live in D:\Save, outside
-    // the repository, so nothing generated is ever committed by accident. The
-    // repo-relative results/ directory is the fallback, so anyone cloning this
-    // can still reproduce the figures without that drive.
-    const string PreferredResultsRoot = @"D:\Save\results";
+    // Where generated artefacts go: a Results folder beside the project file,
+    // so a run leaves its data next to the code that produced it and the path
+    // carries no machine dependency. The folder is git-ignored, so nothing
+    // generated is ever committed; methodology.md is the one exception, being
+    // written by hand and belonging with the data it describes.
+    const string ResultsFolderName = "Results";
 
-    /// <summary>One file for every configuration, as the reviewer asked.</summary>
+    /// <summary>Marks the project root when resolving <see cref="ResultsFolderName"/>.</summary>
+    const string ProjectFileName = "AStar_Console_App.csproj";
+
+    /// <summary>One file spanning every configuration, as the study requires.</summary>
     const string RunsFileName = "runs.csv";
 
     /// <summary>
@@ -62,12 +66,38 @@ class Program
         if (options.SelfTest)
             return SelfTest.Run(options.MasterSeed) ? Ok : CrossCheckFailed;
 
-        // Refreshing the viewing copy runs no experiment, so it comes before
-        // anything that would prompt.
+        // Refreshing the viewing copy and probing the machine both run no
+        // experiment, so they come before anything that would prompt.
         if (options.ExcelOnly)
             return WriteExcelView(options.ResultsDirectory);
 
+        if (options.EnvironmentOnly)
+            return WriteEnvironmentReport(options.ResultsDirectory, options.MasterSeed);
+
         return options.Demo ? RunDemo(options) : RunHarness(options);
+    }
+
+    /// <summary>
+    /// Writes the machine-generated technical report. Nothing is measured, so it
+    /// can be regenerated at any time — but it records the build configuration
+    /// it ran from, so it belongs to the build that produced the data.
+    /// </summary>
+    static int WriteEnvironmentReport(string resultsDirectory, long masterSeed)
+    {
+        string path;
+        try
+        {
+            path = EnvironmentProbe.Write(resultsDirectory, masterSeed);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return OutputFailed;
+        }
+
+        Console.WriteLine($"Environment report written to {path}");
+        return Ok;
     }
 
     /// <summary>
@@ -171,6 +201,13 @@ class Program
         int viewCode = WriteExcelView(options.ResultsDirectory);
         if (viewCode != Ok)
             return viewCode;
+
+        // Also unconditional, and for the same reason: a technical report that
+        // has to be remembered is one that ends up describing a different build
+        // from the one that wrote the rows above it.
+        int environmentCode = WriteEnvironmentReport(options.ResultsDirectory, options.MasterSeed);
+        if (environmentCode != Ok)
+            return environmentCode;
 
         return summary.CrossCheckPassed ? Ok : CrossCheckFailed;
     }
@@ -393,8 +430,8 @@ class Program
     // ----------------------------------------------------------- arguments
 
     sealed record Options(
-        bool SelfTest, bool Demo, bool Warmup, bool ExcelOnly, bool Figures, int Scale,
-        string ResultsDirectory, long MasterSeed);
+        bool SelfTest, bool Demo, bool Warmup, bool ExcelOnly, bool EnvironmentOnly,
+        bool Figures, int Scale, string ResultsDirectory, long MasterSeed);
 
     /// <summary>
     /// Arguments: <c>--selftest</c> runs the known-answer checks; <c>--demo</c>
@@ -403,7 +440,9 @@ class Program
     /// can itself be measured against; <c>--excel-only</c> rewrites the
     /// spreadsheet viewing copy from the existing <c>runs.csv</c> without
     /// running anything, which is how it is refreshed after a run that predates
-    /// it; <c>--no-figures</c> runs the experiment without drawing anything;
+    /// it; <c>--environment</c> rewrites the <c>environment.md</c> technical
+    /// report and runs nothing else; <c>--no-figures</c> runs the experiment
+    /// without drawing anything;
     /// <c>--scale N</c> overrides the pixels per cell the figure-scale table
     /// would pick;
     /// <c>--seed N</c> or <c>--seed=N</c> sets the
@@ -423,6 +462,7 @@ class Program
         bool demo = false;
         bool warmup = true;
         bool excelOnly = false;
+        bool environmentOnly = false;
         bool figures = true;
         int scale = FigureWriter.AutoScale;
         string? resultsDirectory = null;
@@ -463,6 +503,12 @@ class Program
             if (arg.Equals("--excel-only", StringComparison.OrdinalIgnoreCase))
             {
                 excelOnly = true;
+                continue;
+            }
+
+            if (arg.Equals("--environment", StringComparison.OrdinalIgnoreCase))
+            {
+                environmentOnly = true;
                 continue;
             }
 
@@ -525,28 +571,26 @@ class Program
             Console.WriteLine($"Ignoring unknown flag: {arg}");
         }
 
-        options = new Options(selfTest, demo, warmup, excelOnly, figures, scale,
+        options = new Options(selfTest, demo, warmup, excelOnly, environmentOnly, figures, scale,
             resultsDirectory ?? DefaultResultsDirectory(), masterSeed);
         return true;
     }
 
-    // Results never belong in bin/, so that one results directory accumulates
-    // across runs. Order of preference: PreferredResultsRoot if its parent
-    // exists, then results/ beside the project file, then the working directory.
+    // Resolved by walking up from the binary to the project file, so the same
+    // directory is used whether the program was started by the CLI, by an IDE
+    // or from bin/ directly — results never land in bin/, and one directory
+    // accumulates across runs. A published build has no project file beside it,
+    // so that case falls back to the working directory.
     static string DefaultResultsDirectory()
     {
-        string? preferredParent = Path.GetDirectoryName(PreferredResultsRoot);
-        if (!string.IsNullOrEmpty(preferredParent) && Directory.Exists(preferredParent))
-            return PreferredResultsRoot;
-
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (directory.GetFiles("AStar_Console_App.csproj").Length > 0)
-                return Path.Combine(directory.FullName, "results");
+            if (directory.GetFiles(ProjectFileName).Length > 0)
+                return Path.Combine(directory.FullName, ResultsFolderName);
             directory = directory.Parent;
         }
-        return Path.Combine(Directory.GetCurrentDirectory(), "results");
+        return Path.Combine(Directory.GetCurrentDirectory(), ResultsFolderName);
     }
 
     static void Warn(string message)

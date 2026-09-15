@@ -10,15 +10,15 @@ namespace AStar.Core;
 /// percolation thresholds quoted in the study hold as textbook constants and
 /// why octile is the exact remaining cost on an obstacle-free grid. The
 /// consequence is that a diagonal chain of obstacles is not a barrier, so a
-/// rendered path can appear to cross one. This is a deliberate, recorded
-/// decision — do not add a corner-cut rule.
+/// rendered path can appear to cross one. Adding a corner-cut rule would change
+/// the model to something other than 8-connectivity and invalidate both.
 /// </para>
 /// </summary>
 public sealed class MovementModel
 {
     /// <summary>
-    /// Written the same way the original code wrote it, so the diagonal step
-    /// cost is the identical double and paths stay bit-for-bit comparable.
+    /// One shared constant, so every diagonal step in the study costs the
+    /// identical double and path costs stay bit-for-bit comparable.
     /// </summary>
     private static readonly double Diagonal = Math.Sqrt(2);
 
@@ -48,8 +48,8 @@ public sealed class MovementModel
 
     /// <summary>
     /// N, NE, E, SE, S, SW, W, NW — orthogonal steps cost 1, diagonals √2.
-    /// Direction order is the original code's, kept for fidelity; it cannot
-    /// affect results, because the open-set comparer is a total order.
+    /// The order neighbours are visited in cannot affect results, because the
+    /// open-set comparer is a total order.
     /// </summary>
     public static readonly MovementModel EightDirectional = new(
         "8-DIR",

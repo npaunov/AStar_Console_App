@@ -26,7 +26,7 @@ public sealed class SearchResult
     /// <summary>Total cost of <see cref="Path"/>; <c>NaN</c> when no route exists.</summary>
     public required double PathCost { get; init; }
 
-    /// <summary>Cells in the path, the reviewer's "path length".</summary>
+    /// <summary>Cells in the path — the study's "path length".</summary>
     public int PathLengthCells => Path.Count;
 
     /// <summary>Cells popped and processed. Stale re-pops are not counted.</summary>

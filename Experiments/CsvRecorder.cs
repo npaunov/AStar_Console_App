@@ -5,8 +5,8 @@ namespace AStar.Experiments;
 /// <summary>
 /// Appends run records to <c>runs.csv</c>, one row per execution.
 /// <para>
-/// The reviewer asked for every individual run, never just averages, and for one
-/// file spanning all configurations — so the file is opened in append mode and
+/// The study records every individual run, never just averages, in one file
+/// spanning all configurations — so the file is opened in append mode and
 /// the header is written only when the file is new. Each row is flushed as it is
 /// written, so an interrupted invocation still leaves valid data behind.
 /// </para>
@@ -18,17 +18,17 @@ namespace AStar.Experiments;
 public sealed class CsvRecorder : IDisposable
 {
     /// <summary>
-    /// Round-trippable, because the reviewer may want to re-check Dijkstra
-    /// against A* from the file itself, and the 1e-9 relative tolerance needs
-    /// more significant digits than a fixed-point format gives at a cost of
-    /// several hundred.
+    /// Round-trippable, so cost equality between Dijkstra and A* can be
+    /// re-checked from the file itself. The 1e-9 relative tolerance needs more
+    /// significant digits than a fixed-point format gives at a cost of several
+    /// hundred.
     /// </summary>
     private const string CostFormat = "G17";
 
     /// <summary>
     /// The canonical file's separators, and they are not configurable: comma
-    /// between fields, dot for decimals. This is what the reviewer's statistics
-    /// tools expect and what the study documents.
+    /// between fields, dot for decimals. This is what statistical tools expect
+    /// and what the study documents.
     /// </summary>
     private const string FieldSeparator = ",";
     private const string DecimalSeparator = ".";
@@ -54,9 +54,9 @@ public sealed class CsvRecorder : IDisposable
     /// </summary>
     private static readonly (string Name, bool Numeric, Func<RunRecord, string> Value)[] Columns =
     {
-        // master_seed is not in the reviewer's column list; it is here so a row
-        // stays self-describing in a file that accumulates across invocations,
-        // which may not all have used the same seed.
+        // master_seed is beyond the required columns; it is here so a row stays
+        // self-describing in a file that accumulates across invocations, which
+        // may not all have used the same seed.
         ("master_seed",             true,  r => Integer(r.MasterSeed)),
         ("grid_size",               true,  r => Integer(r.GridSize)),
         ("obstacle_density",        true,  r => r.ObstacleDensity.ToString("0.00", CultureInfo.InvariantCulture)),
@@ -169,8 +169,8 @@ public sealed class CsvRecorder : IDisposable
     /// — where double-clicking <c>runs.csv</c> puts every field in one column.
     /// <para>
     /// <b>Purely for viewing, and purely derived.</b> The canonical file stays
-    /// the data: it is what the reviewer receives and what the statistics tools
-    /// read. This copy is rewritten from it in full every time, so it always
+    /// the data: it is what is delivered and what statistical tools read. This
+    /// copy is rewritten from it in full every time, so it always
     /// covers every configuration accumulated so far, it can be regenerated at
     /// any time without re-running an experiment, and it cannot drift. Nothing
     /// should ever be read back out of it.

@@ -11,7 +11,7 @@ namespace AStar.Experiments;
 /// expanded-node, time and allocation figures with an empty
 /// <c>path_cost</c> — while a run whose endpoints could not be drawn at all is
 /// empty from <c>start_x</c> onward. Writing 0 instead would be a fabricated
-/// measurement, and both cases are results the study reports (caveat 5.1).
+/// measurement, and both cases are results the study reports.
 /// </para>
 /// </summary>
 public sealed record RunRecord

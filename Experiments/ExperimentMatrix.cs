@@ -37,16 +37,17 @@ public sealed record Configuration(int Size, double Density, MovementModel Model
 }
 
 /// <summary>
-/// The fixed experiment matrix: the reviewer's four grid sizes, five densities
-/// and two movement models, plus the algorithm set each model implies. One place
-/// to read the design off, so the menus, the runner and the write-up cannot
+/// The fixed experiment matrix: four grid sizes, five obstacle densities and
+/// two movement models, plus the algorithm set each model implies. One place to
+/// read the design off, so the menus, the runner and the documentation cannot
 /// drift apart.
 /// </summary>
 public static class ExperimentMatrix
 {
     /// <summary>
     /// Independently generated maps per configuration, one endpoint pair each.
-    /// The reviewer asked for at least 30 runs per combination.
+    /// Thirty gives 30 statistically independent observations per combination,
+    /// so no single map's quirks can dominate a configuration.
     /// </summary>
     public const int RunsPerConfiguration = 30;
 

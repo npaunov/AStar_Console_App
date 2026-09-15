@@ -6,10 +6,9 @@ using AStar.Generation;
 namespace AStar;
 
 /// <summary>
-/// Hand-verified known-answer checks, plus an equivalence check against the
-/// implementation that existed before the Core/Algorithms split. A
-/// zero-dependency stand-in for a test framework, and something concrete the
-/// write-up can cite for correctness.
+/// Hand-verified known-answer checks, plus a controlled A/B of the search with
+/// and without its closed-set guard. A zero-dependency substitute for a test
+/// framework, and something concrete the methodology can cite for correctness.
 /// </summary>
 public static class SelfTest
 {
@@ -57,7 +56,7 @@ public static class SelfTest
         DiagonalSqueeze();
         SeededGeneration();
         AlgorithmsAgreeOnCost();
-        MatchesPreRefactorImplementation();
+        ClosedSetGuardIsLoadBearing();
 
         Console.WriteLine();
         Console.WriteLine($"{_passed} passed, {_failed} failed.");
@@ -68,7 +67,7 @@ public static class SelfTest
 
     /// <summary>
     /// An obstacle-free grid, where both primary heuristics are <i>exact</i>.
-    /// This is caveat 5.2 made concrete: every cell on every optimal path
+    /// The tie-break caveat made concrete: every cell on every optimal path
     /// shares the same f, so the expanded-node count is decided entirely by the
     /// tie-break. With f-ties broken on lower h, A* marches straight down an
     /// optimal path and expands only its cells — the best case. A different
@@ -152,10 +151,10 @@ public static class SelfTest
 
     /// <summary>
     /// Two obstacles touching corner to corner, with the path crossing the same
-    /// point from the other diagonal. This <b>must</b> be traversable: diagonals
-    /// are permissive by decision, which keeps the 8-directional model exactly
-    /// 8-connectivity. The test exists so the rule cannot be silently "fixed"
-    /// in a later session — if someone adds a corner-cut check, this fails.
+    /// point from the other diagonal. This <b>must</b> be traversable:
+    /// diagonals are permissive, which is what keeps the 8-directional model
+    /// exactly 8-connectivity. The test exists so the rule cannot be silently
+    /// "fixed" — if someone adds a corner-cut check, this fails.
     /// </summary>
     private static void DiagonalSqueeze()
     {
@@ -182,9 +181,9 @@ public static class SelfTest
     /// <summary>
     /// The reproducibility guarantee the study rests on: one seed always rebuilds
     /// the same environment, and a neighbouring run index never rebuilds it by
-    /// accident. Also pins the obstacle count, because the generation principle
-    /// the reviewer asked to have documented is "exactly
-    /// <c>floor(density × cells)</c>, uniformly placed".
+    /// accident. Also pins the obstacle count, because the documented
+    /// generation principle is "exactly <c>floor(density × cells)</c>,
+    /// uniformly placed".
     /// </summary>
     private static void SeededGeneration()
     {
@@ -275,38 +274,36 @@ public static class SelfTest
     }
 
     /// <summary>
-    /// Equivalence against the pre-refactor implementation, in two parts,
-    /// because the answer turned out to be more interesting than expected.
-    /// <para>
-    /// Every metric the study records is preserved: success, expanded nodes,
-    /// the explored set cell for cell, path length and path cost. The exact
-    /// <i>route</i> is not, and the closed-set guard is the entire reason.
-    /// </para>
+    /// A controlled A/B establishing that the closed-set guard is load-bearing
+    /// for reproducibility, not merely an optimisation. The reference
+    /// implementation below is the same A* with the guard switchable.
     /// <para>
     /// Octile is a consistent heuristic in exact arithmetic, so a settled cell
     /// should never be improved again. In <c>double</c> it is consistent only to
     /// within rounding: two equal-cost routes accumulate g by adding √2 and 1 in
-    /// different orders, so their sums differ in the last few bits. The old code
-    /// treated a 7e-15 difference as a genuine improvement, re-expanded the
-    /// settled cell, and propagated a new parent downstream — choosing a
-    /// different member of a set of equally optimal routes on the strength of a
-    /// rounding artefact. The guard cuts that propagation off.
+    /// different orders, so their sums differ in the last few bits. Without the
+    /// guard, a difference of a few times 1e-15 is treated as a genuine
+    /// improvement, the settled cell is re-expanded and a new parent propagates
+    /// downstream — choosing a different member of a set of equally optimal
+    /// routes on the strength of a rounding artefact. The guard cuts that
+    /// propagation off.
     /// </para>
     /// <para>
-    /// The reference implementation below is temporary and can be deleted once
-    /// Step 4's seed scheme makes any regression reproducible another way.
+    /// Run unguarded, every metric the study records still comes out equally
+    /// optimal, but <c>expanded_nodes</c> and the chosen route do not match.
+    /// Run guarded, everything matches cell for cell — which isolates the guard
+    /// as the single cause.
     /// </para>
     /// </summary>
-    private static void MatchesPreRefactorImplementation()
+    private static void ClosedSetGuardIsLoadBearing()
     {
-        Section($"Matches the pre-refactor implementation ({MapCount} generated maps)");
+        Section($"Closed-set guard, with and without ({MapCount} generated maps)");
 
-        // Part 1: against the original exactly as it was — no closed-set guard.
-        // Both must find an optimal route on every map. Nothing stronger is
-        // asserted, because nothing stronger is true.
-        Check("original, no guard: both find a route of the same optimal cost", CompareWithReference(
+        // Part 1: guard off. Both must find an optimal route on every map.
+        // Nothing stronger is asserted, because nothing stronger is true.
+        Check("without the guard: both find a route of the same optimal cost", CompareWithReference(
             closedGuard: false, exact: false));
-        Console.WriteLine($"  INFO  the original re-expanded settled cells {_rePopRelaxations} times, " +
+        Console.WriteLine($"  INFO  unguarded, settled cells were re-expanded {_rePopRelaxations} times, " +
                           $"{_rePopNewDiscoveries} of them genuine discoveries, largest apparent " +
                           $"improvement {_worstRePopImprovement.ToString("E3", CultureInfo.InvariantCulture)} " +
                           $"— rounding noise, not a better route");
@@ -314,10 +311,9 @@ public static class SelfTest
                           $"from {_mostFewerExpansions} to +{_mostExtraExpansions} cells: at 1e-15 the noise " +
                           $"perturbs f, which perturbs pop order. The guard makes this deterministic.");
 
-        // Part 2: add the closed-set guard to the original and change nothing
-        // else. Everything now matches to the cell, which isolates the guard as
-        // the single behavioural difference the refactor introduced.
-        Check("original plus the guard: identical metrics and identical routes", CompareWithReference(
+        // Part 2: guard on, nothing else changed. Everything now matches to the
+        // cell, which isolates the guard as the single cause of the difference.
+        Check("with the guard: identical metrics and identical routes", CompareWithReference(
             closedGuard: true, exact: true));
     }
 
@@ -344,27 +340,27 @@ public static class SelfTest
             if (!TryGenerate(map, out var grid, out var start, out var goal, out string failure))
                 return Mismatch($"map {map}: {failure}");
 
-            var (legacyPath, legacyExplored) = ReferenceAStar(grid, start, goal, closedGuard);
+            var (referencePath, referenceExplored) = ReferenceAStar(grid, start, goal, closedGuard);
             var current = Search(Heuristic.Octile, grid, start, goal, model);
 
-            bool legacyFound = legacyPath.Count > 0;
-            if (legacyFound != current.Success)
-                return Mismatch($"map {map}: success differs (was {legacyFound}, now {current.Success})");
+            bool referenceFound = referencePath.Count > 0;
+            if (referenceFound != current.Success)
+                return Mismatch($"map {map}: success differs (reference {referenceFound}, current {current.Success})");
 
             var nowExplored = new HashSet<(int, int)>(current.ExploredCells(grid.Width));
 
             if (exact)
             {
-                if (legacyExplored.Count != current.ExpandedNodes)
+                if (referenceExplored.Count != current.ExpandedNodes)
                     return Mismatch($"map {map}: expanded differs " +
-                                    $"(was {legacyExplored.Count}, now {current.ExpandedNodes})");
+                                    $"(reference {referenceExplored.Count}, current {current.ExpandedNodes})");
 
                 // Membership, not just the count: equal counts could still hide
                 // two searches that diverged and coincidentally explored as much.
-                if (!nowExplored.SetEquals(legacyExplored))
+                if (!nowExplored.SetEquals(referenceExplored))
                 {
                     var difference = new HashSet<(int, int)>(nowExplored);
-                    difference.SymmetricExceptWith(legacyExplored);
+                    difference.SymmetricExceptWith(referenceExplored);
                     return Mismatch($"map {map}: explored sets differ in {difference.Count} cells");
                 }
             }
@@ -374,7 +370,7 @@ public static class SelfTest
                 // noise perturbs f, which perturbs pop order, so the two
                 // searches diverge in both directions. Only recorded, not
                 // asserted.
-                int difference = current.ExpandedNodes - legacyExplored.Count;
+                int difference = current.ExpandedNodes - referenceExplored.Count;
                 if (difference != 0)
                 {
                     _mapsWithDifferentExpansion++;
@@ -383,26 +379,26 @@ public static class SelfTest
                 }
             }
 
-            if (!legacyFound)
+            if (!referenceFound)
                 continue;
 
-            if (legacyPath.Count != current.Path.Count)
+            if (referencePath.Count != current.Path.Count)
                 return Mismatch($"map {map}: path length differs " +
-                                $"(was {legacyPath.Count}, now {current.Path.Count})");
+                                $"(reference {referencePath.Count}, current {current.Path.Count})");
 
-            double legacyCost = PathCost(legacyPath);
-            if (Deviation(legacyCost, current.PathCost) > Epsilon)
+            double referenceCost = PathCost(referencePath);
+            if (Deviation(referenceCost, current.PathCost) > Epsilon)
                 return Mismatch($"map {map}: path cost differs " +
-                                $"(was {legacyCost.ToString("F9", CultureInfo.InvariantCulture)}, " +
-                                $"now {current.PathCost.ToString("F9", CultureInfo.InvariantCulture)})");
+                                $"(reference {referenceCost.ToString("F9", CultureInfo.InvariantCulture)}, " +
+                                $"current {current.PathCost.ToString("F9", CultureInfo.InvariantCulture)})");
 
             if (!exact)
                 continue;
 
-            for (int i = 0; i < legacyPath.Count; i++)
-                if (legacyPath[i] != current.Path[i])
+            for (int i = 0; i < referencePath.Count; i++)
+                if (referencePath[i] != current.Path[i])
                     return Mismatch($"map {map}: route differs at step {i} " +
-                                    $"(was {legacyPath[i]}, now {current.Path[i]})");
+                                    $"(reference {referencePath[i]}, current {current.Path[i]})");
         }
 
         return true;
@@ -417,10 +413,11 @@ public static class SelfTest
     // ------------------------------------------------- reference implementation
 
     /// <summary>
-    /// The A* that shipped before the Core/Algorithms split, preserved verbatim
-    /// in structure: <see cref="SortedSet{T}"/> with a hand-written
-    /// <c>(f, h, x, y)</c> comparer, dictionary state, no closed-set guard, and
-    /// an explored <see cref="HashSet{T}"/>. Only the grid access is adapted.
+    /// An independent A* written to a deliberately different shape than
+    /// <see cref="AStarPathfinder"/>: <see cref="SortedSet{T}"/> with a
+    /// hand-written <c>(f, h, x, y)</c> comparer, dictionary state instead of
+    /// flat arrays, and an explored <see cref="HashSet{T}"/>. The closed-set
+    /// guard is a switch, which is what makes the A/B above possible.
     /// </summary>
     private static (List<(int, int)> Path, HashSet<(int, int)> Explored) ReferenceAStar(
         Grid grid, (int, int) start, (int, int) goal, bool closedGuard = false)
@@ -492,8 +489,8 @@ public static class SelfTest
             int ny = pos.Item2 + dy[dir];
             if (grid.InBounds(nx, ny) && grid.IsFree(nx, ny))
             {
-                // The original multiplied a per-cell weight of 1 by the step
-                // factor; the weight array is gone, the arithmetic is not.
+                // Written as a product so the floating-point arithmetic matches
+                // the production step cost exactly, not just to a tolerance.
                 double cost = 1 * ((dx[dir] != 0 && dy[dir] != 0) ? Math.Sqrt(2) : 1.0);
                 neighbors.Add(((nx, ny), cost));
             }
