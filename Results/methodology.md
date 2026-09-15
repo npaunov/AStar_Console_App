@@ -446,6 +446,25 @@ ascending `(f, h, x, y)`. On an empty 10×10 grid corner to corner this expands
 cases only the cells of the path itself, the best possible outcome. A different
 tie-break on the same grid could expand the whole rectangle.
 
+**That ideal survives at every grid size only in the 4-directional model, and
+the reason is the arithmetic.** There `g` and `h` are both integer-valued, so
+equal-cost routes produce exactly equal `f`, the ties are genuine ties and the
+tie-break decides them: on an obstacle-free grid A*-Manhattan expands exactly
+the cells of the path in all 30 runs at each of 50×50, 100×100, 250×250 and
+500×500. In the 8-directional model `g` accumulates √2 while `h` is computed in
+one multiplication, so two routes of genuinely equal cost yield `f` values
+differing in the last few bits. Those are no longer ties, and the longer the
+route the more roundings accumulate. On obstacle-free grids A*-octile expands
+exactly the path in 10 of 30 runs at 50×50, in 4 of 30 at 250×250 and in none
+at 500×500, where the median is 62 cells expanded for every cell of the path.
+
+For reading the data: **at low obstacle density, `expanded_nodes` for A*-octile
+on the larger grids is inflated by this effect and is not a measure of the
+heuristic's strength alone.** The paths remain optimal — the cross-check in
+section 10 passes on every row — so this is a cost in expanded nodes, not an
+error in the answer. Caveat 7 is the same phenomenon seen from the side of
+search order, and gives the mechanism.
+
 ### Caveat 3 — "Expanded nodes" needs a pinned definition
 
 Expanded (popped and processed) ≠ generated (pushed) ≠ visited. Both counters
@@ -1055,6 +1074,26 @@ allocated_bytes, success, optimal_cost_match, cost_deviation
 и в двата случая само клетките на самия маршрут, възможно най-добрият резултат.
 Различно правило за равенства върху същата решетка би могло да разшири целия
 правоъгълник.
+
+**Този идеал оцелява при всеки размер на решетката само при модела с четири
+направления и причината е аритметиката.** Там `g` и `h` са целочислени, така че
+маршрути с еднаква цена дават точно еднакво `f`, равенствата са истински
+равенства и правилото ги решава: в среда без препятствия A*-Manhattan разширява
+точно клетките на маршрута при всичките 30 изпълнения на всеки от размерите
+50×50, 100×100, 250×250 и 500×500. При осем направления `g` натрупва √2, а `h` се
+изчислява с едно умножение, така че два маршрута с наистина еднаква цена дават
+стойности на `f`, различаващи се в последните няколко бита. Те вече не са
+равенства, а колкото по-дълъг е маршрутът, толкова повече закръгляния се
+натрупват. В среда без препятствия A*-octile разширява точно маршрута при 10 от
+30 изпълнения при 50×50, при 4 от 30 при 250×250 и при нито едно при 500×500,
+където медианата е 62 разширени клетки за всяка клетка от маршрута.
+
+За разчитането на данните: **при ниска плътност на препятствията стойността на
+`expanded_nodes` за A*-octile върху по-големите решетки е завишена от този ефект
+и не измерва само силата на евристиката.** Маршрутите остават оптимални —
+проверката в раздел 10 преминава при всеки ред — така че това е цена в разширени
+възли, а не грешка в отговора. Уговорка 7 е същото явление, видяно откъм реда на
+търсене, и дава механизма.
 
 ### Уговорка 3 — „Разширени възли“ изисква фиксирано определение
 
