@@ -1,15 +1,24 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Threading;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using AStar.Rendering;
 
 class Program
 {
-    static void Main()
+    // Where generated artefacts go. The study's outputs live in D:\Save, outside
+    // the repository, so nothing generated is ever committed by accident. The
+    // repo-relative results/ directory is the fallback, so anyone cloning this
+    // can still reproduce the figures without that drive.
+    const string PreferredResultsRoot = @"D:\Save\results";
+
+    static void Main(string[] args)
     {
         // Set grid dimensions
         int width = 30, height = 30;
 
-        // Create a 2D grid: 1 = free cell, 99 = obstacle
+        // Create a 2D grid: 0 = free cell, 99 = obstacle
         int[,] grid = new int[height, width];
 
         // Create a 2D array for cell movement cost (1 for free cell, 99 for obstacle)
@@ -41,52 +50,56 @@ class Program
 
         //Assign weights: 1 for free cells, 99 for obstacles
         for (int y = 0; y < height; y++)
-                    for (int x = 0; x < width; x++)
-                        cellCost[y, x] = grid[y, x] == 0 ? 1 : 99;
+            for (int x = 0; x < width; x++)
+                cellCost[y, x] = grid[y, x] == 0 ? 1 : 99;
 
         //// Assign weights: random 1-9 for free cells, 99 for obstacles
         //for (int y = 0; y < height; y++)
         //    for (int x = 0; x < width; x++)
         //        cellCost[y, x] = grid[y, x] == 0 ? rand.Next(1, 9) : 99;
 
-        // Print grid with cell weights before pathfinding
-        Console.WriteLine("Grid with weights (before path):");
-        PrintGrid(grid, cellCost, null, null, start, goal, width, height, showPath: false);
+        // Print the environment once, before the search, if it is small enough to read
+        if (ConsoleGridRenderer.CanPrint(width, height))
+        {
+            Console.WriteLine("Grid with weights (before path):");
+            ConsoleGridRenderer.PrintGrid(grid, cellCost, null, null, start, goal, width, height, showPath: false);
+        }
 
-        // Start measuring the time taken for the A* search
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        // Run the A* search algorithm to find the path
-        var path = AStarSearch(grid, cellCost, start, goal, width, height);
-
-        // Stop the timer
+        // Time the search and nothing else — no console painting inside the
+        // measured region, so this is a measurement of the algorithm.
+        // Memory is the allocated-bytes delta across the same region: allocation
+        // churn is deterministic, unlike working set. The Stopwatch is built
+        // before the first snapshot so its own allocation is not attributed to
+        // the search, and both snapshots sit outside the timed region because
+        // precise: true is not free.
+        var sw = new Stopwatch();
+        long allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
+        sw.Start();
+        var (path, explored) = AStarSearch(grid, cellCost, start, goal, width, height);
         sw.Stop();
+        long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
 
-        // Print grid with the final path
-        Console.WriteLine("\nGrid with final path:");
-        PrintGrid(grid, cellCost, path, null, start, goal, width, height, showPath: true);
+        // Print the finished grid once, with the path and the explored set
+        if (ConsoleGridRenderer.CanPrint(width, height))
+        {
+            Console.WriteLine("\nGrid with final path:");
+            ConsoleGridRenderer.PrintGrid(grid, cellCost, path, explored, start, goal, width, height, showPath: true);
+        }
 
-        // Print start and goal positions with both marker and coordinates
+        // Print start and goal positions as coordinates
         Console.WriteLine();
-        Console.WriteLine($"Start: {CoordToMarker(start)} ({start.x},{start.y})");
-        Console.WriteLine($"Goal:  {CoordToMarker(goal)} ({goal.x},{goal.y})");
+        Console.WriteLine($"Start: {ConsoleGridRenderer.FormatCoord(start)}");
+        Console.WriteLine($"Goal:  {ConsoleGridRenderer.FormatCoord(goal)}");
         Console.WriteLine();
 
         // If a valid path was found, print the path details
-        if (path.Count > 0 && path[0] == start && path[^1] == goal)
+        bool success = path.Count > 0 && path[0] == start && path[^1] == goal;
+        if (success)
         {
             Console.WriteLine("A* Path found!"); // Path found message
             Console.WriteLine($"Path length: {path.Count}"); // Path length
             Console.WriteLine("Path sequence (from start to goal):");
-            // Print the path as a sequence of grid markers
-            for (int i = 0; i < path.Count; i++)
-            {
-                var step = path[i]; // Get step coordinates
-                Console.Write($"{CoordToMarker(step)}"); // Print marker
-                if (i < path.Count - 1)
-                    Console.Write(" -> ");
-            }
-            Console.WriteLine();
+            ConsoleGridRenderer.PrintPathSequence(path);
         }
         else
         {
@@ -94,92 +107,119 @@ class Program
             Console.WriteLine("No path found from start to goal.");
         }
 
-        // Print the time taken for the search in minutes, seconds, and milliseconds
-        Console.WriteLine();
-        Console.WriteLine($"Search time: {sw.Elapsed.Minutes}m {sw.Elapsed.Seconds}s {sw.Elapsed.Milliseconds}ms");
+        Console.WriteLine($"Expanded nodes: {explored.Count}");
 
-        // Helper function to convert (x, y) to grid marker (e.g., C3)
-        static string CoordToMarker((int x, int y) coord)
-        {
-            char col = (char)('A' + coord.x); // Convert x to column letter
-            int row = coord.y + 1;            // Convert y to row number (1-based)
-            return $"{col}{row}"; // Return marker string
-        }
+        // Print the time and memory taken for the search
+        Console.WriteLine();
+        Console.WriteLine($"Search time: {sw.Elapsed.TotalMilliseconds.ToString("F3", CultureInfo.InvariantCulture)} ms");
+        Console.WriteLine($"Allocated:   {FormatBytes(allocatedBytes)} ({allocatedBytes.ToString(CultureInfo.InvariantCulture)} bytes)");
+
+        // Render the run as a PNG — this replaces the per-expansion console
+        // animation and is the only visualisation that scales past ~50x50.
+        string figurePath = WriteFigure(grid, path, explored, start, goal, width, height,
+            sw.Elapsed.TotalMilliseconds, allocatedBytes, success, ResolveResultsDirectory(args));
+        Console.WriteLine($"Figure written to: {figurePath}");
     }
 
-    // Function to print the grid with weights, path, and explored cells
-    static void PrintGrid(
+    // Renders the finished search to an indexed-palette PNG under results/ and
+    // returns the full path of the file it wrote.
+    static string WriteFigure(
         int[,] grid,
-        int[,] cellCost,
         List<(int, int)> path,
         HashSet<(int, int)> explored,
         (int x, int y) start,
         (int x, int y) goal,
         int width,
         int height,
-        bool showPath)
+        double elapsedMs,
+        long allocatedBytes,
+        bool success,
+        string resultsDirectory)
     {
-        Console.Write("  "); // Print column header spacing
-        for (int x = 0; x < width; x++)
-        {
-            char colMark = (char)('A' + x); // Column letter
-            Console.Write($"{colMark} ");
-        }
-        Console.WriteLine();
+        // The renderer works from a plain obstacle mask; the weight array is a
+        // console-view concern only. The density is counted off the mask rather
+        // than taken from the requested obstacle count, so the caption always
+        // describes the environment that was actually drawn and searched.
+        var blocked = new bool[height, width];
+        int blockedCells = 0;
         for (int y = 0; y < height; y++)
-        {
-            Console.Write($"{y + 1,2} "); // Print row number
             for (int x = 0; x < width; x++)
+                if (grid[y, x] == 99)
+                {
+                    blocked[y, x] = true;
+                    blockedCells++;
+                }
+
+        double densityPercent = 100.0 * blockedCells / (width * height);
+
+        var panel = new PanelData
+        {
+            Blocked = blocked,
+            Start = start,
+            Goal = goal,
+            Explored = explored,
+            Path = success ? path : null,
+            Labels = new[]
             {
-                // Print start cell
-                if ((x, y) == start)
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write("S ");
-                    Console.ResetColor();
-                }
-                // Print goal cell
-                else if ((x, y) == goal)
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write("G ");
-                    Console.ResetColor();
-                }
-                // Print obstacle cell
-                else if (grid[y, x] == 99)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.Write("@ ");
-                    Console.ResetColor();
-                }
-                // Print path cell (if path is shown)
-                else if (showPath && path != null && path.Contains((x, y)))
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write("* ");
-                    Console.ResetColor();
-                }
-                // Print explored cell (visited during search)
-                else if (explored != null && explored.Contains((x, y)))
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkYellow;
-                    Console.Write(". ");
-                    Console.ResetColor();
-                }
-                // Print cell cost for free cell
-                else
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkBlue;
-                    Console.Write($"{cellCost[y, x]} ");
-                    Console.ResetColor();
-                }
-            }
-            Console.WriteLine(); // New line for next row
-        }
+                "A* OCTILE 8-DIR",
+                $"GRID: {width} X {height}",
+                $"EXPANDED: {explored.Count}   PATH: {(success ? path.Count : 0)} CELLS",
+                // InvariantCulture matters twice over: this machine's locale uses a
+                // comma as the decimal separator, and the bitmap font has no comma.
+                $"OBSTACLES: {densityPercent.ToString("F1", CultureInfo.InvariantCulture)} %",
+                $"TIME: {elapsedMs.ToString("F2", CultureInfo.InvariantCulture)} MS",
+                $"MEMORY: {FormatBytes(allocatedBytes)}",
+            },
+        };
+
+        var image = GridImageRenderer.Render(panel, GridImageRenderer.SuggestScale(width, height));
+        string figurePath = Path.Combine(resultsDirectory, "demo", "astar_demo.png");
+        PngEncoder.Write(figurePath, image);
+        return figurePath;
     }
 
-    // A* search algorithm for finding the shortest path
-    static List<(int, int)> AStarSearch(int[,] grid, int[,] cellCost, (int, int) start, (int, int) goal, int width, int height)
+    // Byte counts in a fixed set of units. InvariantCulture keeps the decimal
+    // separator a dot: this machine's locale uses a comma, and the bitmap font
+    // has no comma glyph, so a comma would render as a blank on the figure.
+    static string FormatBytes(long bytes)
+    {
+        const double Kilobyte = 1024.0;
+        const double Megabyte = Kilobyte * 1024.0;
+
+        if (Math.Abs(bytes) >= Megabyte)
+            return (bytes / Megabyte).ToString("F2", CultureInfo.InvariantCulture) + " MB";
+        if (Math.Abs(bytes) >= Kilobyte)
+            return (bytes / Kilobyte).ToString("F1", CultureInfo.InvariantCulture) + " KB";
+        return bytes.ToString(CultureInfo.InvariantCulture) + " B";
+    }
+
+    // Results never belong in bin/, so that one results directory accumulates
+    // across runs. Order of preference: an explicit path given as the first
+    // command-line argument, then PreferredResultsRoot if its parent exists,
+    // then results/ beside the project file, then the working directory.
+    static string ResolveResultsDirectory(string[] args)
+    {
+        if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]))
+            return args[0];
+
+        string? preferredParent = Path.GetDirectoryName(PreferredResultsRoot);
+        if (!string.IsNullOrEmpty(preferredParent) && Directory.Exists(preferredParent))
+            return PreferredResultsRoot;
+
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (directory.GetFiles("AStar_Console_App.csproj").Length > 0)
+                return Path.Combine(directory.FullName, "results");
+            directory = directory.Parent;
+        }
+        return Path.Combine(Directory.GetCurrentDirectory(), "results");
+    }
+
+    // A* search algorithm for finding the shortest path. Returns the path and
+    // the set of expanded nodes; the caller decides how to visualise them.
+    static (List<(int, int)> Path, HashSet<(int, int)> Explored) AStarSearch(
+        int[,] grid, int[,] cellCost, (int, int) start, (int, int) goal, int width, int height)
     {
         // Open set, sorted by F = G + H (total estimated cost)
         var openSet = new SortedSet<(double, double, (int, int))>(Comparer<(double, double, (int, int))>.Create((a, b) =>
@@ -212,15 +252,9 @@ class Program
             var current = openSet.Min.Item3; // Get node with lowest F score
             explored.Add(current); // Mark as explored
 
-            // Visualize current path and explored cells
-            var currentPath = ReconstructPath(cameFrom, current);
-            Console.Clear(); // Clear console for animation
-            PrintGrid(grid, cellCost, currentPath, explored, start, goal, width, height, showPath: true);
-            Thread.Sleep(0); // Pause for visualization
-
             // If we've reached the goal, reconstruct and return the path
             if (current == goal)
-                return ReconstructPath(cameFrom, current);
+                return (ReconstructPath(cameFrom, current), explored);
 
             openSet.Remove(openSet.Min); // Remove current node from open set
 
@@ -239,7 +273,7 @@ class Program
             }
         }
         // If no path is found, return an empty list
-        return new List<(int, int)>();
+        return (new List<(int, int)>(), explored);
     }
 
     // Returns a list of valid neighbor positions (8 directions) and their move cost, using cell weights
