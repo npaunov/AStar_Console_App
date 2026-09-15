@@ -11,8 +11,9 @@ using AStar.Rendering;
 /// By default it runs the <b>experiment harness</b>: it prompts for one
 /// configuration — grid size, obstacle density, movement model — then executes
 /// 30 independently generated environments against three algorithms, appends 90
-/// rows to <c>runs.csv</c> and refreshes the <c>runs_excel.csv</c> viewing copy
-/// beside it. <c>--demo</c> runs the original single-map walkthrough instead,
+/// rows to <c>runs.csv</c>, writes 30 three-panel composite figures and
+/// refreshes the <c>runs_excel.csv</c> viewing copy beside it. <c>--demo</c>
+/// runs the original single-map walkthrough instead,
 /// which prints the grid and renders the three-panel figure; <c>--selftest</c>
 /// runs the known-answer checks.
 /// </para>
@@ -123,6 +124,21 @@ class Program
         var configuration = new Configuration(chosenSize, chosenDensity, chosenModel);
         string csvPath = Path.Combine(options.ResultsDirectory, RunsFileName);
 
+        FigureWriter? figures = null;
+        if (options.Figures)
+        {
+            figures = new FigureWriter(options.ResultsDirectory, configuration, options.Scale);
+            Console.WriteLine();
+            Console.WriteLine($"Figures:   {figures.OutputDirectory}");
+
+            // Re-running the same configuration at the same master seed rewrites
+            // identical files, but at a different seed the figures would be
+            // replaced while runs.csv kept both — worth one line of warning.
+            int existing = figures.ExistingFigureCount;
+            if (existing > 0)
+                Warn($"{existing} figure(s) already there and will be overwritten.");
+        }
+
         Console.WriteLine();
 
         CsvRecorder recorder;
@@ -141,11 +157,13 @@ class Program
         using (recorder)
         {
             Console.WriteLine($"Recording to {recorder.Path} ({(recorder.Appending ? "appending" : "new file")})");
-            summary = new ExperimentRunner(configuration, options.MasterSeed, options.Warmup).Run(recorder);
+            summary = new ExperimentRunner(configuration, options.MasterSeed, options.Warmup).Run(recorder, figures);
         }
 
         Console.WriteLine();
         Console.WriteLine($"{summary.RowsWritten} rows appended to {csvPath}");
+        if (figures is not null)
+            Console.WriteLine($"{summary.FiguresWritten} figures written to {figures.OutputDirectory}");
 
         // Always written, and only after the data is safely on disk and closed.
         // It is derived from the file that was just completed, so the two can
@@ -254,7 +272,8 @@ class Program
         Report(grid, mask, start, goal, model, measured, options.MasterSeed, mapSeed, endpointSeed, endpoints);
         CrossCheckCosts(measured);
 
-        string figurePath = WriteFigure(grid, mask, start, goal, model, measured, options.ResultsDirectory);
+        string figurePath = WriteFigure(
+            grid, mask, start, goal, model, measured, options.ResultsDirectory, options.Scale);
         Console.WriteLine($"Figure written to: {figurePath}");
         return Ok;
     }
@@ -302,7 +321,7 @@ class Program
                 $"{(r.Success ? r.PathLengthCells.ToString(CultureInfo.InvariantCulture) : "-"),6}" +
                 $"{cost,10}" +
                 $"{m.ElapsedMs.ToString("F3", CultureInfo.InvariantCulture),12}" +
-                $"{FormatBytes(m.AllocatedBytes),12}");
+                $"{FigureWriter.FormatBytes(m.AllocatedBytes),12}");
         }
 
         if (!measured[0].Result.Success)
@@ -352,40 +371,20 @@ class Program
         (int x, int y) goal,
         MovementModel model,
         Measurement[] measured,
-        string resultsDirectory)
+        string resultsDirectory,
+        int scale)
     {
-        string density = grid.DensityPercent.ToString("F1", CultureInfo.InvariantCulture);
+        // Panels and captions come from the harness's own figure code, so the
+        // demo cannot caption the same picture differently from the study.
+        var panels = FigureWriter.BuildPanels(grid, mask, start, goal, model, measured);
+        int pxPerCell = scale == FigureWriter.AutoScale
+            ? GridImageRenderer.SuggestScale(grid.Width, grid.Height)
+            : scale;
 
-        var panels = new PanelData[measured.Length];
-        for (int i = 0; i < measured.Length; i++)
-        {
-            var r = measured[i].Result;
-            panels[i] = new PanelData
-            {
-                Blocked = mask,
-                Start = start,
-                Goal = goal,
-                // Materialised here, outside the measured region.
-                Explored = r.ExploredCells(grid.Width),
-                Path = r.Success ? r.Path : null,
-                Labels = new[]
-                {
-                    r.Label,
-                    $"GRID: {grid.Width} X {grid.Height} {model.Name}",
-                    $"EXPANDED: {r.ExpandedNodes}   PATH: {r.PathLengthCells} CELLS",
-                    $"OBSTACLES: {density} %",
-                    // InvariantCulture matters twice over: this machine's locale
-                    // uses a comma as the decimal separator, and the bitmap font
-                    // has no comma glyph, so a comma would render as a blank.
-                    $"TIME: {measured[i].ElapsedMs.ToString("F2", CultureInfo.InvariantCulture)} MS",
-                    $"MEMORY: {FormatBytes(measured[i].AllocatedBytes)}",
-                },
-            };
-        }
+        var image = GridImageRenderer.RenderComposite(panels, pxPerCell);
 
-        var image = GridImageRenderer.RenderComposite(
-            panels, GridImageRenderer.SuggestScale(grid.Width, grid.Height));
-
+        // A throwaway, overwritten on every demo run: the harness's figures are
+        // the ones that go with the data.
         string figurePath = Path.Combine(resultsDirectory, "demo", "astar_vs_dijkstra.png");
         PngEncoder.Write(figurePath, image);
         return figurePath;
@@ -394,7 +393,7 @@ class Program
     // ----------------------------------------------------------- arguments
 
     sealed record Options(
-        bool SelfTest, bool Demo, bool Warmup, bool ExcelOnly,
+        bool SelfTest, bool Demo, bool Warmup, bool ExcelOnly, bool Figures, int Scale,
         string ResultsDirectory, long MasterSeed);
 
     /// <summary>
@@ -404,7 +403,9 @@ class Program
     /// can itself be measured against; <c>--excel-only</c> rewrites the
     /// spreadsheet viewing copy from the existing <c>runs.csv</c> without
     /// running anything, which is how it is refreshed after a run that predates
-    /// it;
+    /// it; <c>--no-figures</c> runs the experiment without drawing anything;
+    /// <c>--scale N</c> overrides the pixels per cell the figure-scale table
+    /// would pick;
     /// <c>--seed N</c> or <c>--seed=N</c> sets the
     /// master seed every environment is derived from; the first argument without
     /// a <c>--</c> prefix overrides the output directory. The prefix convention
@@ -422,6 +423,8 @@ class Program
         bool demo = false;
         bool warmup = true;
         bool excelOnly = false;
+        bool figures = true;
+        int scale = FigureWriter.AutoScale;
         string? resultsDirectory = null;
         long masterSeed = SeedScheme.DefaultMasterSeed;
 
@@ -463,6 +466,38 @@ class Program
                 continue;
             }
 
+            if (arg.Equals("--no-figures", StringComparison.OrdinalIgnoreCase))
+            {
+                figures = false;
+                continue;
+            }
+
+            // Same two spellings as --seed, and the same refusal to fall back:
+            // a scale that was misread would silently produce a figure set at
+            // the wrong size.
+            string? scaleText = null;
+            if (arg.StartsWith("--scale=", StringComparison.OrdinalIgnoreCase))
+                scaleText = arg["--scale=".Length..];
+            else if (arg.Equals("--scale", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                scaleText = args[++i];
+
+            if (scaleText is not null)
+            {
+                if (!int.TryParse(scaleText, NumberStyles.Integer, CultureInfo.InvariantCulture, out scale)
+                    || scale < 1)
+                {
+                    error = $"Not a valid scale: '{scaleText}'. Expected pixels per cell, 1 or more.";
+                    return false;
+                }
+                continue;
+            }
+
+            if (arg.Equals("--scale", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "--scale needs a value, for example --scale 4.";
+                return false;
+            }
+
             // Both "--seed=N" and "--seed N", because either is the obvious one
             // to type and the wrong guess would otherwise be read as a directory.
             string? seedText = null;
@@ -490,7 +525,7 @@ class Program
             Console.WriteLine($"Ignoring unknown flag: {arg}");
         }
 
-        options = new Options(selfTest, demo, warmup, excelOnly,
+        options = new Options(selfTest, demo, warmup, excelOnly, figures, scale,
             resultsDirectory ?? DefaultResultsDirectory(), masterSeed);
         return true;
     }
@@ -514,18 +549,10 @@ class Program
         return Path.Combine(Directory.GetCurrentDirectory(), "results");
     }
 
-    // Byte counts in a fixed set of units. InvariantCulture keeps the decimal
-    // separator a dot: this machine's locale uses a comma, and the bitmap font
-    // has no comma glyph, so a comma would render as a blank on the figure.
-    static string FormatBytes(long bytes)
+    static void Warn(string message)
     {
-        const double Kilobyte = 1024.0;
-        const double Megabyte = Kilobyte * 1024.0;
-
-        if (Math.Abs(bytes) >= Megabyte)
-            return (bytes / Megabyte).ToString("F2", CultureInfo.InvariantCulture) + " MB";
-        if (Math.Abs(bytes) >= Kilobyte)
-            return (bytes / Kilobyte).ToString("F1", CultureInfo.InvariantCulture) + " KB";
-        return bytes.ToString(CultureInfo.InvariantCulture) + " B";
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine(message);
+        Console.ResetColor();
     }
 }

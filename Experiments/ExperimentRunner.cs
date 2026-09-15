@@ -12,6 +12,7 @@ public sealed record Measurement(SearchResult Result, double ElapsedMs, long All
 public sealed record InvocationSummary
 {
     public required int RowsWritten { get; init; }
+    public required int FiguresWritten { get; init; }
     public required int EndpointFailures { get; init; }
     public required bool CrossCheckPassed { get; init; }
     public required double WorstCostDeviation { get; init; }
@@ -111,8 +112,13 @@ public sealed class ExperimentRunner
     /// <summary>
     /// Executes the configuration, writing one row per execution as it goes and
     /// printing progress. Returns what the caller needs for the exit code.
+    /// <para>
+    /// <paramref name="figures"/> is optional so the harness stays usable
+    /// without them; when supplied it gets one composite per run, rendered from
+    /// the searches that were just timed.
+    /// </para>
     /// </summary>
-    public InvocationSummary Run(CsvRecorder recorder)
+    public InvocationSummary Run(CsvRecorder recorder, FigureWriter? figures = null)
     {
         var model = _configuration.Model;
         var variants = ExperimentMatrix.Variants(model);
@@ -197,6 +203,12 @@ public sealed class ExperimentRunner
                     variants[i], run, mapSeed, pairSeed, start, goal, measured[i], match, deviation));
             }
 
+            // Drawn only once every search of this run has been timed. Encoding
+            // a PNG costs far more than the searches it depicts, and the next
+            // run's first search is preceded by a full blocking collection
+            // anyway, so this cannot leak into any measurement.
+            figures?.Write(run, grid, start, goal, model, measured);
+
             PrintRunLine(run, start, goal, baseline, measured, runAgrees);
         }
 
@@ -206,6 +218,7 @@ public sealed class ExperimentRunner
         return new InvocationSummary
         {
             RowsWritten = recorder.RowsWritten,
+            FiguresWritten = figures?.FiguresWritten ?? 0,
             EndpointFailures = endpointFailures,
             CrossCheckPassed = passed,
             WorstCostDeviation = worstDeviation,

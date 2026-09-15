@@ -77,8 +77,8 @@ public sealed class PanelData
 /// <summary>
 /// Paints grids, explored sets and paths into an <see cref="IndexedImage"/> and
 /// composes several panels side by side, each with a caption strip underneath.
-/// Step 2 uses a single panel; the three-panel composite figure is wired up in
-/// Step 6 by handing this the same method more than one <see cref="PanelData"/>.
+/// The study's figures are three panels — one per algorithm — built by
+/// <c>FigureWriter</c>; one panel is the same method with a shorter list.
 /// </summary>
 public static class GridImageRenderer
 {

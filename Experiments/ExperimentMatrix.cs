@@ -23,6 +23,17 @@ public sealed record Configuration(int Size, double Density, MovementModel Model
         $"{Size} x {Size}, " +
         $"{DensityPercent.ToString("F0", CultureInfo.InvariantCulture)} % obstacles, " +
         $"{Model.Name}";
+
+    /// <summary>
+    /// "size500_density20_8dir" — the directory this configuration's figures go
+    /// in. Filename-safe by construction: digits and underscores only, and the
+    /// direction count rather than the model's display name, which carries a
+    /// hyphen.
+    /// </summary>
+    public string Slug =>
+        $"size{Size.ToString(CultureInfo.InvariantCulture)}_" +
+        $"density{DensityPercent.ToString("F0", CultureInfo.InvariantCulture)}_" +
+        $"{Model.DirectionCount.ToString(CultureInfo.InvariantCulture)}dir";
 }
 
 /// <summary>
