@@ -5,6 +5,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- This is a measurement build. .NET normally emits an unoptimised tier-0
+         version of a method first and recompiles it fully optimised only after
+         roughly 30 calls; at exactly 30 measured runs per configuration that
+         threshold would fall inside the measurement set, and each algorithm
+         would cross it at a different run. Disabling tiering means every method
+         is fully optimised on its first call, so no timing in runs.csv can be a
+         compilation artefact. The harness also warms each variant past the
+         threshold, which covers plain first-call JIT. -->
+    <TieredCompilation>false</TieredCompilation>
   </PropertyGroup>
 
 </Project>

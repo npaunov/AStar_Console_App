@@ -1,20 +1,19 @@
-using System.Diagnostics;
 using System.Globalization;
 using AStar;
-using AStar.Algorithms;
 using AStar.Core;
+using AStar.Experiments;
 using AStar.Generation;
 using AStar.Rendering;
 
 /// <summary>
 /// Console driver for the A* versus Dijkstra study.
 /// <para>
-/// Generates one environment from the master seed, holds it in memory, and runs
-/// the three 8-directional variants over it — Dijkstra as the baseline, A* with
-/// octile, A* with euclidean — measuring each search and nothing else. In
-/// miniature, this is the loop the experiment harness will run 30 times per
-/// configuration; <c>--seed</c> changes which environment it draws, and the same
-/// seed always draws the same one.
+/// By default it runs the <b>experiment harness</b>: it prompts for one
+/// configuration — grid size, obstacle density, movement model — then executes
+/// 30 independently generated environments against three algorithms and appends
+/// 90 rows to <c>runs.csv</c>. <c>--demo</c> runs the original single-map
+/// walkthrough instead, which prints the grid and renders the three-panel
+/// figure; <c>--selftest</c> runs the known-answer checks.
 /// </para>
 /// </summary>
 class Program
@@ -25,6 +24,15 @@ class Program
     // can still reproduce the figures without that drive.
     const string PreferredResultsRoot = @"D:\Save\results";
 
+    /// <summary>One file for every configuration, as the reviewer asked.</summary>
+    const string RunsFileName = "runs.csv";
+
+    /// <summary>
+    /// The viewing copy, for spreadsheets on a comma-decimal locale. Derived
+    /// from <see cref="RunsFileName"/> and never read back.
+    /// </summary>
+    const string ExcelFileName = "runs_excel.csv";
+
     // The demo environment: run 1 of a configuration the real matrix contains,
     // so the demo is a miniature of the experiment rather than a special case.
     const int DemoWidth = 30;
@@ -32,20 +40,186 @@ class Program
     const double DemoDensity = 0.30;
     const int DemoRun = 1;
 
-    /// <summary>One search plus the cost of running it. Measured by the caller.</summary>
-    sealed record Measurement(SearchResult Result, double ElapsedMs, long AllocatedBytes);
+    // Exit codes. Anything non-zero means no usable data was produced, except
+    // CrossCheckFailed, which means data was produced and it is wrong.
+    const int Ok = 0;
+    const int CrossCheckFailed = 1;
+    const int BadArguments = 2;
+    const int NoEndpoints = 3;
+    const int InputClosed = 4;
+    const int OutputFailed = 5;
 
     static int Main(string[] args)
     {
         if (!TryParseArguments(args, out var options, out string error))
         {
             Console.Error.WriteLine(error);
-            return 2;
+            return BadArguments;
         }
 
         if (options.SelfTest)
-            return SelfTest.Run(options.MasterSeed) ? 0 : 1;
+            return SelfTest.Run(options.MasterSeed) ? Ok : CrossCheckFailed;
 
+        // Refreshing the viewing copy runs no experiment, so it comes before
+        // anything that would prompt.
+        if (options.ExcelOnly)
+            return WriteExcelView(options.ResultsDirectory);
+
+        return options.Demo ? RunDemo(options) : RunHarness(options);
+    }
+
+    /// <summary>
+    /// Rewrites the spreadsheet viewing copy from the canonical
+    /// <c>runs.csv</c>, covering every configuration accumulated so far.
+    /// </summary>
+    static int WriteExcelView(string resultsDirectory)
+    {
+        string canonicalPath = Path.Combine(resultsDirectory, RunsFileName);
+        string excelPath = Path.Combine(resultsDirectory, ExcelFileName);
+
+        try
+        {
+            CsvRecorder.WriteExcelCopy(canonicalPath, excelPath);
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return OutputFailed;
+        }
+
+        Console.WriteLine($"Spreadsheet view written to {excelPath}");
+        Console.WriteLine("Semicolon-delimited with comma decimals, for viewing only — " +
+                          $"{RunsFileName} stays the data file. Do not save over either from a spreadsheet.");
+        return Ok;
+    }
+
+    // ------------------------------------------------------------- harness
+
+    /// <summary>
+    /// Prompts for one configuration and runs it. Fixed menus, no free text: the
+    /// matrix is the experiment design and typing into it is not a feature.
+    /// </summary>
+    static int RunHarness(Options options)
+    {
+        Console.WriteLine("A* versus Dijkstra — experiment harness");
+        Console.WriteLine("=======================================");
+        Console.WriteLine($"Master seed {options.MasterSeed.ToString(CultureInfo.InvariantCulture)} " +
+                          $"(override with --seed N)");
+
+        if (!TryChoose("Grid size", ExperimentMatrix.GridSizes,
+                size => $"{size} x {size}", out int chosenSize))
+            return InputClosed;
+
+        if (!TryChoose("Obstacle density", ExperimentMatrix.Densities,
+                density => $"{(density * 100).ToString("F0", CultureInfo.InvariantCulture)} %",
+                out double chosenDensity))
+            return InputClosed;
+
+        if (!TryChoose("Movement model", ExperimentMatrix.Models, Describe, out var chosenModel))
+            return InputClosed;
+
+        var configuration = new Configuration(chosenSize, chosenDensity, chosenModel);
+        string csvPath = Path.Combine(options.ResultsDirectory, RunsFileName);
+
+        Console.WriteLine();
+
+        CsvRecorder recorder;
+        try
+        {
+            recorder = new CsvRecorder(csvPath);
+        }
+        catch (Exception exception) when (
+            exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return OutputFailed;
+        }
+
+        InvocationSummary summary;
+        using (recorder)
+        {
+            Console.WriteLine($"Recording to {recorder.Path} ({(recorder.Appending ? "appending" : "new file")})");
+            summary = new ExperimentRunner(configuration, options.MasterSeed, options.Warmup).Run(recorder);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"{summary.RowsWritten} rows appended to {csvPath}");
+
+        // After the data is safely on disk and closed, never before.
+        if (options.ExcelView)
+        {
+            int code = WriteExcelView(options.ResultsDirectory);
+            if (code != Ok)
+                return code;
+        }
+
+        return summary.CrossCheckPassed ? Ok : CrossCheckFailed;
+    }
+
+    /// <summary>
+    /// A movement model as the menu describes it: the model, and the algorithm
+    /// set it implies. Derived from <see cref="ExperimentMatrix.Variants"/> so the
+    /// menu cannot promise a comparison the harness does not run.
+    /// </summary>
+    static string Describe(MovementModel model)
+    {
+        string diagonal = model.DirectionCount == 8 ? ", diagonal step costs sqrt(2)" : "";
+        string algorithms = string.Join(", ", ExperimentMatrix.Variants(model).Select(ExperimentMatrix.Label));
+        return $"{model.DirectionCount}-directional{diagonal} — {algorithms}";
+    }
+
+    /// <summary>
+    /// Prints a numbered menu and reads a choice, re-prompting until one is
+    /// valid. Returns false only when stdin closes, which is the one case the
+    /// caller cannot retry.
+    /// </summary>
+    static bool TryChoose<T>(string title, IReadOnlyList<T> choices, Func<T, string> describe, out T chosen)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"{title}:");
+        for (int i = 0; i < choices.Count; i++)
+            Console.WriteLine($"  {i + 1}) {describe(choices[i])}");
+
+        while (true)
+        {
+            Console.Write($"Choose [1-{choices.Count}]: ");
+            string? line = Console.ReadLine();
+
+            if (line is null)
+            {
+                Console.WriteLine();
+                Console.Error.WriteLine("Input closed before a choice was made.");
+                chosen = default!;
+                return false;
+            }
+
+            if (int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int choice)
+                && choice >= 1 && choice <= choices.Count)
+            {
+                chosen = choices[choice - 1];
+                return true;
+            }
+
+            Console.WriteLine($"Not one of the choices — enter a number from 1 to {choices.Count}.");
+        }
+    }
+
+    // ---------------------------------------------------------------- demo
+
+    /// <summary>
+    /// Generates one environment from the master seed, holds it in memory, and
+    /// runs the three 8-directional variants over it — Dijkstra as the baseline,
+    /// A* with octile, A* with euclidean — measuring each search and nothing
+    /// else, then renders the three-panel figure.
+    /// <para>
+    /// It deliberately has <b>no warmup pass</b>, so its TIME column measures JIT
+    /// compilation as much as the algorithm; every other column is real. The
+    /// harness is the thing to time with.
+    /// </para>
+    /// </summary>
+    static int RunDemo(Options options)
+    {
         var model = MovementModel.EightDirectional;
 
         // Both seeds come from the master seed, so this whole environment — the
@@ -62,7 +236,7 @@ class Program
         if (!endpoints.Success)
         {
             Console.Error.WriteLine($"Could not place start and goal: {endpoints.Failure}");
-            return 3;
+            return NoEndpoints;
         }
 
         var start = endpoints.Start;
@@ -71,50 +245,18 @@ class Program
 
         // Panel and report order is fixed and documented: baseline first, then
         // the movement model's primary heuristic, then euclidean.
-        IPathfinder[] variants =
-        {
-            new DijkstraPathfinder(),
-            new AStarPathfinder(Heuristic.Octile),
-            new AStarPathfinder(Heuristic.Euclidean),
-        };
+        var variants = ExperimentMatrix.Variants(model);
 
         var measured = new Measurement[variants.Length];
         for (int i = 0; i < variants.Length; i++)
-            measured[i] = Measure(variants[i], grid, start, goal, model);
+            measured[i] = ExperimentRunner.Measure(variants[i], grid, start, goal, model);
 
         Report(grid, mask, start, goal, model, measured, options.MasterSeed, mapSeed, endpointSeed, endpoints);
         CrossCheckCosts(measured);
 
         string figurePath = WriteFigure(grid, mask, start, goal, model, measured, options.ResultsDirectory);
         Console.WriteLine($"Figure written to: {figurePath}");
-        return 0;
-    }
-
-    /// <summary>
-    /// Runs one search with the clock and the allocation counter wrapped around
-    /// it, and nothing else inside them.
-    /// </summary>
-    static Measurement Measure(
-        IPathfinder pathfinder, Grid grid, (int x, int y) start, (int x, int y) goal, MovementModel model)
-    {
-        // Clear the heap before every search, so a collection provoked by the
-        // previous one cannot land inside this one's timing. The per-search work
-        // arrays are all far over the 85 KB large-object threshold, and
-        // large-object allocation is what triggers generation-2 collections — a
-        // pause that would bias the algorithms unevenly, since they allocate at
-        // different rates.
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
-        var sw = new Stopwatch();
-        long allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
-        sw.Start();
-        var result = pathfinder.Search(grid, start, goal, model);
-        sw.Stop();
-        long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
-
-        return new Measurement(result, sw.Elapsed.TotalMilliseconds, allocatedBytes);
+        return Ok;
     }
 
     static void Report(
@@ -175,8 +317,6 @@ class Program
     /// </summary>
     static void CrossCheckCosts(Measurement[] measured)
     {
-        const double epsilon = 1e-9;
-
         var baseline = measured[0].Result;
         if (!baseline.Success)
             return;
@@ -191,12 +331,12 @@ class Program
             worst = Math.Max(worst, deviation);
         }
 
-        bool pass = worst <= epsilon;
+        bool pass = worst <= ExperimentRunner.CostEpsilon;
         Console.WriteLine();
         Console.ForegroundColor = pass ? ConsoleColor.Green : ConsoleColor.Red;
         Console.WriteLine($"Optimality cross-check: {(pass ? "PASS" : "FAIL")} — " +
                           $"worst relative deviation {worst.ToString("E2", CultureInfo.InvariantCulture)} " +
-                          $"(tolerance {epsilon.ToString("E0", CultureInfo.InvariantCulture)})");
+                          $"(tolerance {ExperimentRunner.CostEpsilon.ToString("E0", CultureInfo.InvariantCulture)})");
         Console.ResetColor();
         Console.WriteLine();
     }
@@ -251,14 +391,24 @@ class Program
         return figurePath;
     }
 
-    sealed record Options(bool SelfTest, string ResultsDirectory, long MasterSeed);
+    // ----------------------------------------------------------- arguments
+
+    sealed record Options(
+        bool SelfTest, bool Demo, bool Warmup, bool ExcelView, bool ExcelOnly,
+        string ResultsDirectory, long MasterSeed);
 
     /// <summary>
-    /// Arguments: <c>--selftest</c> runs the known-answer checks;
-    /// <c>--seed N</c> or <c>--seed=N</c> sets the master seed every environment
-    /// is derived from; the first argument without a <c>--</c> prefix overrides
-    /// the output directory. The prefix convention exists because the output
-    /// directory was a bare positional argument before any flags existed.
+    /// Arguments: <c>--selftest</c> runs the known-answer checks; <c>--demo</c>
+    /// runs the single-map walkthrough instead of the harness;
+    /// <c>--no-warmup</c> skips the JIT warmup pass, which exists so the warmup
+    /// can itself be measured against; <c>--excel</c> also writes the
+    /// spreadsheet viewing copy after the run and <c>--excel-only</c> writes it
+    /// from the existing <c>runs.csv</c> without running anything;
+    /// <c>--seed N</c> or <c>--seed=N</c> sets the
+    /// master seed every environment is derived from; the first argument without
+    /// a <c>--</c> prefix overrides the output directory. The prefix convention
+    /// exists because the output directory was a bare positional argument before
+    /// any flags existed.
     /// <para>
     /// An unreadable seed is an error rather than a fallback to the default:
     /// quietly running a different seed than the one asked for is the one
@@ -268,6 +418,10 @@ class Program
     static bool TryParseArguments(string[] args, out Options options, out string error)
     {
         bool selfTest = false;
+        bool demo = false;
+        bool warmup = true;
+        bool excelView = false;
+        bool excelOnly = false;
         string? resultsDirectory = null;
         long masterSeed = SeedScheme.DefaultMasterSeed;
 
@@ -288,6 +442,32 @@ class Program
             if (arg.Equals("--selftest", StringComparison.OrdinalIgnoreCase))
             {
                 selfTest = true;
+                continue;
+            }
+
+            if (arg.Equals("--demo", StringComparison.OrdinalIgnoreCase))
+            {
+                demo = true;
+                continue;
+            }
+
+            if (arg.Equals("--no-warmup", StringComparison.OrdinalIgnoreCase))
+            {
+                warmup = false;
+                continue;
+            }
+
+            if (arg.Equals("--excel", StringComparison.OrdinalIgnoreCase))
+            {
+                excelView = true;
+                continue;
+            }
+
+            // Implies --excel: writing the copy is the whole point of the flag.
+            if (arg.Equals("--excel-only", StringComparison.OrdinalIgnoreCase))
+            {
+                excelOnly = true;
+                excelView = true;
                 continue;
             }
 
@@ -318,7 +498,8 @@ class Program
             Console.WriteLine($"Ignoring unknown flag: {arg}");
         }
 
-        options = new Options(selfTest, resultsDirectory ?? DefaultResultsDirectory(), masterSeed);
+        options = new Options(selfTest, demo, warmup, excelView, excelOnly,
+            resultsDirectory ?? DefaultResultsDirectory(), masterSeed);
         return true;
     }
 
